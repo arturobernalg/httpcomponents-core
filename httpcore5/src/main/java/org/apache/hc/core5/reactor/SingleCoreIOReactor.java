@@ -44,6 +44,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.hc.core5.concurrent.FutureCallback;
 import org.apache.hc.core5.function.Callback;
@@ -53,6 +54,8 @@ import org.apache.hc.core5.io.Closer;
 import org.apache.hc.core5.net.NamedEndpoint;
 import org.apache.hc.core5.util.Args;
 import org.apache.hc.core5.util.Asserts;
+import org.apache.hc.core5.util.TimeWheel;
+import org.apache.hc.core5.util.TimeWheelTimeout;
 import org.apache.hc.core5.util.Timeout;
 
 class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements ConnectionInitiator {
@@ -69,7 +72,9 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
     private final Queue<IOSessionRequest> requestQueue;
     private final AtomicBoolean shutdownInitiated;
     private final long selectTimeoutMillis;
-    private volatile long lastTimeoutCheckMillis;
+
+    private final TimeWheel timeWheel;
+    private final AtomicReference<TimeWheelTimeout> timeoutRef;
 
     SingleCoreIOReactor(
             final Callback<Exception> exceptionCallback,
@@ -77,7 +82,8 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
             final IOReactorConfig reactorConfig,
             final Decorator<IOSession> ioSessionDecorator,
             final IOSessionListener sessionListener,
-            final Callback<IOSession> sessionShutdownCallback) {
+            final Callback<IOSession> sessionShutdownCallback,
+            final TimeWheel timeWheel) {
         super(exceptionCallback);
         this.eventHandlerFactory = Args.notNull(eventHandlerFactory, "Event handler factory");
         this.reactorConfig = Args.notNull(reactorConfig, "I/O reactor config");
@@ -89,6 +95,19 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         this.channelQueue = new ConcurrentLinkedQueue<>();
         this.requestQueue = new ConcurrentLinkedQueue<>();
         this.selectTimeoutMillis = this.reactorConfig.getSelectInterval().toMilliseconds();
+        this.timeWheel = Args.notNull(timeWheel, "Time wheel");
+        this.timeoutRef = new AtomicReference<>();
+    }
+
+    SingleCoreIOReactor(
+            final Callback<Exception> exceptionCallback,
+            final IOEventHandlerFactory eventHandlerFactory,
+            final IOReactorConfig reactorConfig,
+            final Decorator<IOSession> ioSessionDecorator,
+            final IOSessionListener sessionListener,
+            final Callback<IOSession> sessionShutdownCallback) {
+        this(exceptionCallback, eventHandlerFactory, reactorConfig, ioSessionDecorator, sessionListener,sessionShutdownCallback,
+                new TimeWheel(reactorConfig.getTickDuration(), reactorConfig.getWheelSize()));
     }
 
     void enqueueChannel(final ChannelEntry entry) throws IOReactorShutdownException {
@@ -104,6 +123,7 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         closePendingChannels();
         closePendingConnectionRequests();
         processClosedSessions();
+        timeWheel.stop();
     }
 
     @Override
@@ -111,7 +131,9 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         while (!Thread.currentThread().isInterrupted()) {
 
             final int readyCount = this.selector.select(this.selectTimeoutMillis);
-
+            if (timeoutRef.get() != null) {
+                timeWheel.remove(timeoutRef.get());
+            }
             if (getStatus().compareTo(IOReactorStatus.SHUTTING_DOWN) >= 0) {
                 if (this.shutdownInitiated.compareAndSet(false, true)) {
                     initiateSessionShutdown();
@@ -126,8 +148,6 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
             if (readyCount > 0) {
                 processEvents(this.selector.selectedKeys());
             }
-
-            validateActiveChannels();
 
             // Process closed sessions
             processClosedSessions();
@@ -160,16 +180,6 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         }
     }
 
-    private void validateActiveChannels() {
-        final long currentTimeMillis = System.currentTimeMillis();
-        if ((currentTimeMillis - this.lastTimeoutCheckMillis) >= this.selectTimeoutMillis) {
-            this.lastTimeoutCheckMillis = currentTimeMillis;
-            for (final SelectionKey key : this.selector.keys()) {
-                checkTimeout(key, currentTimeMillis);
-            }
-        }
-    }
-
     private void processEvents(final Set<SelectionKey> selectedKeys) {
         for (final SelectionKey key : selectedKeys) {
             final InternalChannel channel = (InternalChannel) key.attachment();
@@ -182,6 +192,17 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
             }
         }
         selectedKeys.clear();
+        // Schedule a timeout action
+        scheduleTimeout(() -> {
+            try {
+                // When the timeout is reached, close the connection immediately
+                close(CloseMode.IMMEDIATE);
+            } catch (final Exception ex) {
+                // If there's an error while handling the timeout, print the error message
+                logException(ex);
+            }
+        });
+
     }
 
     private void processPendingChannels() throws IOException {
@@ -213,7 +234,8 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
                     null,
                     ioSessionDecorator,
                     sessionListener,
-                    closedSessions);
+                    closedSessions,
+                    this.timeWheel);
             dataChannel.upgrade(this.eventHandlerFactory.createHandler(dataChannel, attachment));
             dataChannel.setSocketTimeout(this.reactorConfig.getSoTimeout());
             key.attach(dataChannel);
@@ -235,12 +257,12 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         }
     }
 
-    private void checkTimeout(final SelectionKey key, final long nowMillis) {
+  /*  private void checkTimeout(final SelectionKey key, final long nowMillis) {
         final InternalChannel channel = (InternalChannel) key.attachment();
         if (channel != null) {
             channel.checkTimeout(nowMillis);
         }
-    }
+    }*/
 
     @Override
     public Future<IOSession> connect(
@@ -348,7 +370,8 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
                 sessionRequest.remoteEndpoint,
                 ioSessionDecorator,
                 sessionListener,
-                closedSessions);
+                closedSessions,
+                this.timeWheel);
         dataChannel.setSocketTimeout(reactorConfig.getSoTimeout());
         final InternalChannel connectChannel = new InternalConnectChannel(
                 key,
@@ -356,7 +379,8 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
                 sessionRequest,
                 dataChannel,
                 eventHandlerFactory,
-                reactorConfig);
+                reactorConfig,
+                this.timeWheel);
         if (connected) {
             connectChannel.handleIOEvent(SelectionKey.OP_CONNECT);
         } else {
@@ -381,6 +405,29 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         IOSessionRequest sessionRequest;
         while ((sessionRequest = this.requestQueue.poll()) != null) {
             sessionRequest.cancel();
+        }
+    }
+
+    /**
+     * Schedules a timeout to be executed after a specified duration has elapsed.
+     * <p>The method first checks if there is a previously scheduled timeout and removes it
+     * if one exists. Then, it creates a new {@link TimeWheelTimeout} instance with the tick
+     * duration specified in the {@link IOReactorConfig}, and a task that simply prints "Timeout
+     * completed" to the console. The new timeout is added to the {@link TimeWheel}, and the
+     * reference to the previous timeout is updated to point to the new timeout.</p>
+     *
+     * @throws NullPointerException if the {@link IOReactorConfig} is null
+     * @since 5.3
+     */
+    private void scheduleTimeout(final Runnable onTimeout) {
+        final TimeWheelTimeout oldTimeout = timeoutRef.getAndSet(null);
+        if (oldTimeout != null) {
+            timeWheel.remove(oldTimeout);
+        }
+
+        final TimeWheelTimeout newTimeout = new TimeWheelTimeout(reactorConfig.getTickDuration(), onTimeout);
+        if (timeoutRef.compareAndSet(null, newTimeout)) {
+            timeWheel.add(newTimeout);
         }
     }
 

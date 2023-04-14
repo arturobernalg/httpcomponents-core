@@ -28,6 +28,7 @@
 package org.apache.hc.core5.reactor;
 
 import java.net.SocketAddress;
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.hc.core5.annotation.Contract;
@@ -60,6 +61,8 @@ public final class IOReactorConfig {
     private final SocketAddress socksProxyAddress;
     private final String socksProxyUsername;
     private final String socksProxyPassword;
+    private final Duration tickDuration;
+    private final int wheelSize;
 
     IOReactorConfig(
             final TimeValue selectInterval,
@@ -75,7 +78,9 @@ public final class IOReactorConfig {
             final int backlogSize,
             final SocketAddress socksProxyAddress,
             final String socksProxyUsername,
-            final String socksProxyPassword) {
+            final String socksProxyPassword,
+            final Duration tickDuration,
+            final int wheelSize) {
         super();
         this.selectInterval = selectInterval;
         this.ioThreadCount = ioThreadCount;
@@ -91,6 +96,8 @@ public final class IOReactorConfig {
         this.socksProxyAddress = socksProxyAddress;
         this.socksProxyUsername = socksProxyUsername;
         this.socksProxyPassword = socksProxyPassword;
+        this.tickDuration = tickDuration;
+        this.wheelSize = wheelSize;
     }
 
     /**
@@ -203,6 +210,33 @@ public final class IOReactorConfig {
         return this.socksProxyPassword;
     }
 
+    /**
+     * Gets the tick duration for the TimeWheel.
+     * <p>
+     * Default: {@code 1000} milliseconds.
+     * </p>
+     *
+     * @return the tick duration as a {@link TimeValue}
+     * @since 5.3
+     */
+    public Duration getTickDuration() {
+        return tickDuration;
+    }
+
+    /**
+     * Gets the wheel size for the TimeWheel.
+     * <p>
+     * Default: {@code 60}.
+     * </p>
+     *
+     * @return the wheel size
+     * @since 5.3
+     */
+    public int getWheelSize() {
+        return wheelSize;
+    }
+
+
     public static Builder custom() {
         return new Builder();
     }
@@ -222,7 +256,8 @@ public final class IOReactorConfig {
             .setBacklogSize(config.getBacklogSize())
             .setSocksProxyAddress(config.getSocksProxyAddress())
             .setSocksProxyUsername(config.getSocksProxyUsername())
-            .setSocksProxyPassword(config.getSocksProxyPassword());
+            .setSocksProxyPassword(config.getSocksProxyPassword())
+            .setTickDuration(config.getTickDuration());
     }
 
     public static class Builder {
@@ -268,6 +303,8 @@ public final class IOReactorConfig {
         private SocketAddress socksProxyAddress;
         private String socksProxyUsername;
         private String socksProxyPassword;
+        private Duration tickDuration;
+        private int wheelSize;
 
         Builder() {
             this.selectInterval = TimeValue.ofSeconds(1);
@@ -284,6 +321,8 @@ public final class IOReactorConfig {
             this.socksProxyAddress = null;
             this.socksProxyUsername = null;
             this.socksProxyPassword = null;
+            this.tickDuration = Duration.ofSeconds(1000);
+            this.wheelSize = 60;
         }
 
         /**
@@ -486,6 +525,35 @@ public final class IOReactorConfig {
             return this;
         }
 
+        /**
+         * Sets the time interval at which the TimeWheel advances its internal timer and checks for timed out tasks.
+         * <p>
+         * Default: {@code 1000} milliseconds.
+         * </p>
+         *
+         * @param tickDuration the duration of each tick of the TimeWheel
+         * @return the Builder instance with the updated tickDuration
+         */
+        public Builder setTickDuration(final Duration tickDuration) {
+            this.tickDuration = tickDuration;
+            return this;
+        }
+
+        /**
+         * Sets the wheel size for the TimeWheel.
+         * <p>
+         * Default: {@code 60}.
+         * </p>
+         *
+         * @param wheelSize the wheel size
+         * @return this Builder instance
+         */
+        public Builder setWheelSize(final int wheelSize) {
+            this.wheelSize = wheelSize;
+            return this;
+        }
+
+
         public IOReactorConfig build() {
             return new IOReactorConfig(
                     selectInterval != null ? selectInterval : TimeValue.ofSeconds(1),
@@ -497,7 +565,9 @@ public final class IOReactorConfig {
                     tcpNoDelay,
                     trafficClass,
                     sndBufSize, rcvBufSize, backlogSize,
-                    socksProxyAddress, socksProxyUsername, socksProxyPassword);
+                    socksProxyAddress, socksProxyUsername, socksProxyPassword,
+                    tickDuration != null || !tickDuration.isNegative() ? tickDuration : Duration.ofMillis(1000),
+                    wheelSize);
         }
 
     }
@@ -517,6 +587,7 @@ public final class IOReactorConfig {
                 .append(", rcvBufSize=").append(this.rcvBufSize)
                 .append(", backlogSize=").append(this.backlogSize)
                 .append(", socksProxyAddress=").append(this.socksProxyAddress)
+                .append(", tickDuration=").append(this.tickDuration)
                 .append("]");
         return builder.toString();
     }

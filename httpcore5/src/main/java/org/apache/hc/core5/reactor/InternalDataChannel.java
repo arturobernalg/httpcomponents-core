@@ -57,6 +57,7 @@ import org.apache.hc.core5.reactor.ssl.TransportSecurityLayer;
 import org.apache.hc.core5.util.Args;
 import org.apache.hc.core5.util.Asserts;
 import org.apache.hc.core5.util.TextUtils;
+import org.apache.hc.core5.util.TimeWheel;
 import org.apache.hc.core5.util.Timeout;
 
 final class InternalDataChannel extends InternalChannel implements ProtocolIOSession {
@@ -72,12 +73,16 @@ final class InternalDataChannel extends InternalChannel implements ProtocolIOSes
     private final ConcurrentMap<String, ProtocolUpgradeHandler> protocolUpgradeHandlerMap;
     private final AtomicBoolean closed;
 
+
+
     InternalDataChannel(
             final IOSession ioSession,
             final NamedEndpoint initialEndpoint,
             final Decorator<IOSession> ioSessionDecorator,
             final IOSessionListener sessionListener,
-            final Queue<InternalDataChannel> closedSessions) {
+            final Queue<InternalDataChannel> closedSessions,
+            final TimeWheel timeWheel) {
+        super(timeWheel);
         this.ioSession = ioSession;
         this.initialEndpoint = initialEndpoint;
         this.closedSessions = closedSessions;

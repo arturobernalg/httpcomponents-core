@@ -28,12 +28,14 @@
 package org.apache.hc.core5.reactor;
 
 import java.io.IOException;
+import java.nio.channels.CancelledKeyException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.io.Closer;
 import org.apache.hc.core5.io.SocketTimeoutExceptionFactory;
+import org.apache.hc.core5.util.TimeWheel;
 import org.apache.hc.core5.util.Timeout;
 
 final class InternalConnectChannel extends InternalChannel {
@@ -52,8 +54,9 @@ final class InternalConnectChannel extends InternalChannel {
             final IOSessionRequest sessionRequest,
             final InternalDataChannel dataChannel,
             final IOEventHandlerFactory eventHandlerFactory,
-            final IOReactorConfig reactorConfig) {
-        super();
+            final IOReactorConfig reactorConfig,
+            final TimeWheel timeWheel) {
+        super(timeWheel);
         this.key = key;
         this.socketChannel = socketChannel;
         this.sessionRequest = sessionRequest;
@@ -69,20 +72,29 @@ final class InternalConnectChannel extends InternalChannel {
             if (socketChannel.isConnectionPending()) {
                 socketChannel.finishConnect();
             }
-            //check out connectTimeout
-            final long now = System.currentTimeMillis();
-            if (checkTimeout(now)) {
-                key.attach(dataChannel);
-                if (reactorConfig.getSocksProxyAddress() == null) {
-                    dataChannel.upgrade(eventHandlerFactory.createHandler(dataChannel, sessionRequest.attachment));
-                    sessionRequest.completed(dataChannel);
-                    dataChannel.handleIOEvent(SelectionKey.OP_CONNECT);
-                } else {
-                    final IOEventHandler ioEventHandler = new SocksProxyProtocolHandler(
-                            dataChannel, sessionRequest, eventHandlerFactory, reactorConfig);
-                    dataChannel.upgrade(ioEventHandler);
-                    ioEventHandler.connected(dataChannel);
+
+            scheduleTimeout(() -> {
+                try {
+                    onTimeout(getTimeout());
+                } catch (final CancelledKeyException ex) {
+                    close(CloseMode.GRACEFUL);
+                } catch (final Exception ex) {
+                    onException(ex);
+                    close(CloseMode.GRACEFUL);
                 }
+            });
+
+
+            key.attach(dataChannel);
+            if (reactorConfig.getSocksProxyAddress() == null) {
+                dataChannel.upgrade(eventHandlerFactory.createHandler(dataChannel, sessionRequest.attachment));
+                sessionRequest.completed(dataChannel);
+                dataChannel.handleIOEvent(SelectionKey.OP_CONNECT);
+            } else {
+                final IOEventHandler ioEventHandler = new SocksProxyProtocolHandler(
+                        dataChannel, sessionRequest, eventHandlerFactory, reactorConfig);
+                dataChannel.upgrade(ioEventHandler);
+                ioEventHandler.connected(dataChannel);
             }
         }
     }

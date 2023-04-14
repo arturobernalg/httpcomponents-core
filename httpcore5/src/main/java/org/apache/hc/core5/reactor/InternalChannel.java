@@ -32,6 +32,8 @@ import java.nio.channels.CancelledKeyException;
 
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.io.ModalCloseable;
+import org.apache.hc.core5.util.TimeWheel;
+import org.apache.hc.core5.util.TimeWheelTimeout;
 import org.apache.hc.core5.util.Timeout;
 
 abstract class InternalChannel implements ModalCloseable {
@@ -46,6 +48,12 @@ abstract class InternalChannel implements ModalCloseable {
 
     abstract long getLastEventTime();
 
+    protected final TimeWheel timeWheel;
+
+    public InternalChannel(final TimeWheel timeWheel) {
+        this.timeWheel = timeWheel;
+    }
+
     final void handleIOEvent(final int ops) {
         try {
             onIOEvent(ops);
@@ -57,24 +65,17 @@ abstract class InternalChannel implements ModalCloseable {
         }
     }
 
-    final boolean checkTimeout(final long currentTimeMillis) {
-        final Timeout timeout = getTimeout();
-        if (!timeout.isDisabled()) {
-            final long timeoutMillis = timeout.toMilliseconds();
-            final long deadlineMillis = getLastEventTime() + timeoutMillis;
-            if (currentTimeMillis > deadlineMillis) {
-                try {
-                    onTimeout(timeout);
-                } catch (final CancelledKeyException ex) {
-                    close(CloseMode.GRACEFUL);
-                } catch (final Exception ex) {
-                    onException(ex);
-                    close(CloseMode.GRACEFUL);
-                }
-                return false;
-            }
+    /**
+     * Schedules a timeout to occur based on the configured timeout duration, invoking the provided
+     * {@code onTimeout} action.
+     *
+     * @param onTimeout the action to be executed when the timeout occurs
+     */
+    protected void scheduleTimeout(final Runnable onTimeout) {
+        if (!getTimeout().isDisabled()) {
+            final TimeWheelTimeout scheduledTimeout = new TimeWheelTimeout(getTimeout().toDuration(), onTimeout);
+            timeWheel.add(scheduledTimeout);
         }
-        return true;
     }
 
 }
