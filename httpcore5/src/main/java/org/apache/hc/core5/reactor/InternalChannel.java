@@ -29,11 +29,11 @@ package org.apache.hc.core5.reactor;
 
 import java.io.IOException;
 import java.nio.channels.CancelledKeyException;
+import java.time.Duration;
 
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.io.ModalCloseable;
-import org.apache.hc.core5.util.TimeWheel;
-import org.apache.hc.core5.util.TimeWheelTimeout;
+import org.apache.hc.core5.util.TimeWheelScheduler;
 import org.apache.hc.core5.util.Timeout;
 
 abstract class InternalChannel implements ModalCloseable {
@@ -48,10 +48,10 @@ abstract class InternalChannel implements ModalCloseable {
 
     abstract long getLastEventTime();
 
-    protected final TimeWheel timeWheel;
+    protected final TimeWheelScheduler timeWheelScheduler;
 
-    public InternalChannel(final TimeWheel timeWheel) {
-        this.timeWheel = timeWheel;
+    public InternalChannel(final TimeWheelScheduler timeWheelScheduler) {
+        this.timeWheelScheduler = timeWheelScheduler;
     }
 
     final void handleIOEvent(final int ops) {
@@ -73,8 +73,8 @@ abstract class InternalChannel implements ModalCloseable {
      */
     protected void scheduleTimeout(final Runnable onTimeout) {
         if (!getTimeout().isDisabled()) {
-            final TimeWheelTimeout scheduledTimeout = new TimeWheelTimeout(getTimeout().toDuration(), onTimeout);
-            timeWheel.add(scheduledTimeout);
+            final Duration timeoutDuration = getTimeout().toDuration();
+            timeWheelScheduler.schedule(onTimeout, timeoutDuration);
         }
     }
 

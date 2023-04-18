@@ -27,47 +27,32 @@
 
 package org.apache.hc.core5.util;
 
-import java.time.Duration;
-import java.time.Instant;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
+public class WorkerPool {
 
-public class TimeWheelTimeout {
+    private final int workerThreads;
+    private final ExecutorService executorService;
 
+    public WorkerPool(final int workerThreads) {
+        this.workerThreads = workerThreads;
+        final BlockingQueue<Runnable> taskQueue = new LinkedBlockingQueue<>();
 
-    private final Instant endTime;
+        final int corePoolSize = Runtime.getRuntime().availableProcessors()*2;
+        final int maximumPoolSize = Runtime.getRuntime().availableProcessors() * 2;
 
-
-    private int index;
-
-
-    private final Runnable task;
-
-
-    public TimeWheelTimeout(final Duration duration, final Runnable task) {
-        Args.notNull(duration, "Duration");
-        Args.notNull(task, "Task");
-        if (duration.isNegative()) {
-            throw new IllegalArgumentException("Duration cannot be negative");
-        }
-        this.endTime = Instant.now().plus(duration);
-        this.index = -1;
-        this.task = task;
+        this.executorService = new ThreadPoolExecutor(corePoolSize,maximumPoolSize, 60L, TimeUnit.SECONDS, taskQueue);
     }
 
-    public Instant getEndTime() {
-        return endTime;
+    public void submit(final TimeWheelTask task) {
+        executorService.submit(task::run);
     }
 
-    public int getIndex() {
-        return index;
-    }
-
-    public void setIndex(final int index) {
-        this.index = index;
-    }
-
-
-    public Runnable getTask() {
-        return task;
+    public void shutdown() {
+        executorService.shutdown();
     }
 }

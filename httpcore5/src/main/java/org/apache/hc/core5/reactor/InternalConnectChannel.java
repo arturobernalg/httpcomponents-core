@@ -35,7 +35,7 @@ import java.nio.channels.SocketChannel;
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.io.Closer;
 import org.apache.hc.core5.io.SocketTimeoutExceptionFactory;
-import org.apache.hc.core5.util.TimeWheel;
+import org.apache.hc.core5.util.TimeWheelScheduler;
 import org.apache.hc.core5.util.Timeout;
 
 final class InternalConnectChannel extends InternalChannel {
@@ -55,8 +55,8 @@ final class InternalConnectChannel extends InternalChannel {
             final InternalDataChannel dataChannel,
             final IOEventHandlerFactory eventHandlerFactory,
             final IOReactorConfig reactorConfig,
-            final TimeWheel timeWheel) {
-        super(timeWheel);
+            final TimeWheelScheduler timeWheelScheduler) {
+        super(timeWheelScheduler);
         this.key = key;
         this.socketChannel = socketChannel;
         this.sessionRequest = sessionRequest;

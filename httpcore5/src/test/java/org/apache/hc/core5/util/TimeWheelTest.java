@@ -40,38 +40,34 @@ import org.junit.jupiter.api.Test;
 
 public class TimeWheelTest {
 
-    private TimeWheel timeWheel;
+    private TimeWheelScheduler timeWheelScheduler;
 
     @BeforeEach
     void setUp() {
-        timeWheel = new TimeWheel(Duration.ofMillis(200), 10);
+        timeWheelScheduler = new TimeWheelScheduler(Duration.ofMillis(200), 10, 4);
     }
 
     @AfterEach
     void tearDown() {
-        timeWheel.stop();
+        timeWheelScheduler.shutdown();
     }
 
     @Test
     void testAddAndExecuteTask() throws InterruptedException {
         final CountDownLatch latch = new CountDownLatch(1);
 
-        final TimeWheelTimeout timeout = new TimeWheelTimeout(Duration.ofMillis(1000), latch::countDown);
-        timeWheel.add(timeout);
+        timeWheelScheduler.schedule(latch::countDown, Duration.ofMillis(1000));
 
         assertTrue(latch.await(2000, TimeUnit.MILLISECONDS), "Task should be executed within the specified duration");
-
-
     }
-
 
     @Test
     void testRemoveTask() throws InterruptedException {
         final CountDownLatch latch = new CountDownLatch(1);
 
-        final TimeWheelTimeout timeout = new TimeWheelTimeout(Duration.ofMillis(300), latch::countDown);
-        timeWheel.add(timeout);
-        timeWheel.remove(timeout);
+        final TimeWheelTask task = new TimeWheelTask(latch::countDown);
+        timeWheelScheduler.schedule(task, Duration.ofMillis(300));
+        task.cancel();
 
         assertFalse(latch.await(500, TimeUnit.MILLISECONDS), "Task should not be executed after removal");
     }
@@ -80,10 +76,11 @@ public class TimeWheelTest {
     void testStopCancelsTasks() throws InterruptedException {
         final CountDownLatch latch = new CountDownLatch(1);
 
-        final TimeWheelTimeout timeout = new TimeWheelTimeout(Duration.ofMillis(300), latch::countDown);
-        timeWheel.add(timeout);
-        timeWheel.stop();
+        timeWheelScheduler.schedule(latch::countDown, Duration.ofMillis(300));
+        timeWheelScheduler.shutdown();
 
-        assertFalse(latch.await(500, TimeUnit.MILLISECONDS), "Task should not be executed after TimeWheel is stopped");
+        assertFalse(latch.await(500, TimeUnit.MILLISECONDS), "Task should not be executed after TimeWheelScheduler is stopped");
     }
 }
+
+

@@ -426,8 +426,8 @@ public class SSLIOSession implements IOSession {
             }
             if (this.tlsDetails == null) {
                 final SSLSession sslSession = this.sslEngine.getSession();
-                final String applicationProtocol = this.sslEngine.getApplicationProtocol();
-                this.tlsDetails = new TlsDetails(sslSession, applicationProtocol);
+               // final String applicationProtocol = this.sslEngine.getApplicationProtocol();
+                //this.tlsDetails = new TlsDetails(sslSession, applicationProtocol);
             }
 
             ensureHandler().connected(protocolSession);

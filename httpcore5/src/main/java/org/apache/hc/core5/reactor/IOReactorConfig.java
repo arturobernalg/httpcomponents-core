@@ -321,7 +321,7 @@ public final class IOReactorConfig {
             this.socksProxyAddress = null;
             this.socksProxyUsername = null;
             this.socksProxyPassword = null;
-            this.tickDuration = Duration.ofSeconds(1000);
+            this.tickDuration = Duration.ofMillis(1000);
             this.wheelSize = 60;
         }
 
