@@ -36,7 +36,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.http.NameValuePair;
@@ -986,4 +989,600 @@ class TestURIBuilder {
         params = uriBuilder.getQueryParams();
         Assertions.assertEquals("hello world", params.get(0).getValue());
     }
+
+
+    private static final Map<String, Object> vars = new HashMap<>();
+
+    static {
+        final Map<String, String> keysMap = new LinkedHashMap<>();
+        keysMap.put("semi", ";");
+        keysMap.put("dot", ".");
+        keysMap.put("comma", ",");
+        vars.put("keys", keysMap);
+
+        // Common variables across all RFC examples
+        vars.put("var", "value");
+        vars.put("hello", "Hello World!");
+        vars.put("path", "/foo/bar");
+        vars.put("empty", "");
+        vars.put("x", "1024");
+        vars.put("y", "768");
+        vars.put("list", Arrays.asList("red", "green", "blue"));
+    }
+
+    //
+    // ========== Level 1 Tests ==========
+    //
+    @Test
+    void testLevel1_var() throws URISyntaxException {
+        // {var} => value
+        final String result = new URITemplate("{var}").expand(vars).toString();
+        Assertions.assertEquals("value", result);
+    }
+
+    @Test
+    void testLevel1_hello() throws URISyntaxException {
+        // {hello} => Hello%20World%21
+        final String result = new URITemplate("{hello}").expand(vars).toString();
+        Assertions.assertEquals("Hello%20World%21", result);
+    }
+
+    //
+    // ========== Level 2 Tests ==========
+    //
+    @Test
+    void testLevel2_plusVar() throws URISyntaxException {
+        // {+var} => value
+        final String result = new URITemplate("{+var}").expand(vars).toString();
+        Assertions.assertEquals("value", result);
+    }
+
+    @Test
+    void testLevel2_plusHello() throws URISyntaxException {
+        // {+hello} => Hello%20World!
+        // The exclamation mark remains unencoded because it's a reserved character
+        final String result = new URITemplate("{+hello}").expand(vars).toString();
+        Assertions.assertEquals("Hello%20World!", result);
+    }
+
+    @Test
+    void testLevel2_plusPathAndThenLiteral() throws URISyntaxException {
+        // {+path}/here => /foo/bar/here
+        final String result = new URITemplate("{+path}/here").expand(vars).toString();
+        Assertions.assertEquals("/foo/bar/here", result);
+    }
+
+    @Test
+    void testLevel2_plusPathInQuery() throws URISyntaxException {
+        // here?ref={+path} => here?ref=/foo/bar
+        final String result = new URITemplate("here?ref={+path}").expand(vars).toString();
+        Assertions.assertEquals("here?ref=/foo/bar", result);
+    }
+
+    @Test
+    void testLevel2_fragmentVar() throws URISyntaxException {
+        // X{#var} => X#value
+        final String result = new URITemplate("X{#var}").expand(vars).toString();
+        Assertions.assertEquals("X#value", result);
+    }
+
+    @Test
+    void testLevel2_fragmentHello() throws URISyntaxException {
+        // X{#hello} => X#Hello%20World!
+        final String result = new URITemplate("X{#hello}").expand(vars).toString();
+        Assertions.assertEquals("X#Hello%20World!", result);
+    }
+
+    //
+    // ========== Level 3 Tests ==========
+    //
+    @Test
+    void testLevel3_multiSimple() throws URISyntaxException {
+        // map?{x,y} => map?1024,768
+        String result = new URITemplate("map?{x,y}").expand(vars).toString();
+        Assertions.assertEquals("map?1024,768", result);
+
+        // {x,hello,y} => 1024,Hello%20World%21,768
+        result = new URITemplate("{x,hello,y}").expand(vars).toString();
+        Assertions.assertEquals("1024,Hello%20World%21,768", result);
+    }
+
+    @Test
+    void testLevel3_multiReserved() throws URISyntaxException {
+        // {+x,hello,y} => 1024,Hello%20World!,768
+        String result = new URITemplate("{+x,hello,y}").expand(vars).toString();
+        Assertions.assertEquals("1024,Hello%20World!,768", result);
+
+        // {+path,x}/here => /foo/bar,1024/here
+        result = new URITemplate("{+path,x}/here").expand(vars).toString();
+        Assertions.assertEquals("/foo/bar,1024/here", result);
+    }
+
+    @Test
+    void testLevel3_multiFragment() throws URISyntaxException {
+        // {#x,hello,y} => #1024,Hello%20World!,768
+        String result = new URITemplate("{#x,hello,y}").expand(vars).toString();
+        Assertions.assertEquals("#1024,Hello%20World!,768", result);
+
+        // {#path,x}/here => #/foo/bar,1024/here
+        result = new URITemplate("{#path,x}/here").expand(vars).toString();
+        Assertions.assertEquals("#/foo/bar,1024/here", result);
+    }
+
+    @Test
+    void testLevel3_labelExpansion() throws URISyntaxException {
+        // X{.var} => X.value
+        String result = new URITemplate("X{.var}").expand(vars).toString();
+        Assertions.assertEquals("X.value", result);
+
+        // X{.x,y} => X.1024.768
+        result = new URITemplate("X{.x,y}").expand(vars).toString();
+        Assertions.assertEquals("X.1024.768", result);
+    }
+
+    @Test
+    void testLevel3_pathSegments() throws URISyntaxException {
+        // {/var} => /value
+        String result = new URITemplate("{/var}").expand(vars).toString();
+        Assertions.assertEquals("/value", result);
+
+        // {/var,x}/here => /value/1024/here
+        result = new URITemplate("{/var,x}/here").expand(vars).toString();
+        Assertions.assertEquals("/value/1024/here", result);
+    }
+
+    @Test
+    void testLevel3_pathStyleParameters() throws URISyntaxException {
+        // {;x,y} => ;x=1024;y=768
+        String result = new URITemplate("{;x,y}").expand(vars).toString();
+        Assertions.assertEquals(";x=1024;y=768", result);
+
+        // {;x,y,empty} => ;x=1024;y=768;empty
+        result = new URITemplate("{;x,y,empty}").expand(vars).toString();
+        Assertions.assertEquals(";x=1024;y=768;empty", result);
+    }
+
+    @Test
+    void testLevel3_formStyleQuery() throws URISyntaxException {
+        // {?x,y} => ?x=1024&y=768
+        String result = new URITemplate("{?x,y}").expand(vars).toString();
+        Assertions.assertEquals("?x=1024&y=768", result);
+
+        // {?x,y,empty} => ?x=1024&y=768&empty=
+        result = new URITemplate("{?x,y,empty}").expand(vars).toString();
+        Assertions.assertEquals("?x=1024&y=768&empty=", result);
+    }
+
+    @Test
+    void testLevel3_formStyleQueryContinuation() throws URISyntaxException {
+        // ?fixed=yes{&x} => ?fixed=yes&x=1024
+        String result = new URITemplate("?fixed=yes{&x}").expand(vars).toString();
+        Assertions.assertEquals("?fixed=yes&x=1024", result);
+
+        // {&x,y,empty} => &x=1024&y=768&empty=
+        result = new URITemplate("{&x,y,empty}").expand(vars).toString();
+        Assertions.assertEquals("&x=1024&y=768&empty=", result);
+    }
+
+    //
+    // ========== Level 4 Tests ==========
+    // prefix modifiers (:N) and explode (*)
+    //
+    @Test
+    void testLevel4_stringExpansionWithValueModifiers() throws URISyntaxException {
+        // {var:3} => val
+        String result = new URITemplate("{var:3}").expand(vars).toString();
+        Assertions.assertEquals("val", result);
+
+        // {var:30} => value (since var is "value", prefix 30 is the whole string)
+        result = new URITemplate("{var:30}").expand(vars).toString();
+        Assertions.assertEquals("value", result);
+
+        // {list} => red,green,blue
+        result = new URITemplate("{list}").expand(vars).toString();
+        Assertions.assertEquals("red,green,blue", result);
+
+        // {list*} => red,green,blue
+        result = new URITemplate("{list*}").expand(vars).toString();
+        Assertions.assertEquals("red,green,blue", result);
+
+        // {keys} => semi,%3B,dot,.,comma,%2C
+        // semicolon => %3B, period => ., comma => %2C
+        result = new URITemplate("{keys}").expand(vars).toString();
+        Assertions.assertEquals("semi,%3B,dot,.,comma,%2C", result);
+
+        // {keys*} => semi=%3B,dot=.,comma=%2C
+        result = new URITemplate("{keys*}").expand(vars).toString();
+        Assertions.assertEquals("semi=%3B,dot=.,comma=%2C", result);
+    }
+
+    @Test
+    void testLevel4_reservedExpansionWithValueModifiers() throws URISyntaxException {
+        // {+path:6}/here => /foo/b/here  ("/foo/bar" truncated to 6 => "/foo/b")
+        String result = new URITemplate("{+path:6}/here").expand(vars).toString();
+        Assertions.assertEquals("/foo/b/here", result);
+
+        // {+list} => red,green,blue  (reserved expansion allows reserved chars unencoded)
+        result = new URITemplate("{+list}").expand(vars).toString();
+        Assertions.assertEquals("red,green,blue", result);
+
+        // {+list*} => red,green,blue
+        result = new URITemplate("{+list*}").expand(vars).toString();
+        Assertions.assertEquals("red,green,blue", result);
+
+        // {+keys} => semi,;,dot,.,comma,,
+        // Notice the semicolon `;` and comma `,` remain unencoded because it's + expansion
+        result = new URITemplate("{+keys}").expand(vars).toString();
+        Assertions.assertEquals("semi,;,dot,.,comma,,", result);
+
+        // {+keys*} => semi=;,dot=.,comma=,
+        result = new URITemplate("{+keys*}").expand(vars).toString();
+        Assertions.assertEquals("semi=;,dot=.,comma=,", result);
+    }
+
+    @Test
+    void testLevel4_fragmentExpansionWithValueModifiers() throws URISyntaxException {
+        // {#path:6}/here => #/foo/b/here
+        String result = new URITemplate("{#path:6}/here").expand(vars).toString();
+        Assertions.assertEquals("#/foo/b/here", result);
+
+        // {#list} => #red,green,blue
+        result = new URITemplate("{#list}").expand(vars).toString();
+        Assertions.assertEquals("#red,green,blue", result);
+
+        // {#list*} => #red,green,blue
+        result = new URITemplate("{#list*}").expand(vars).toString();
+        Assertions.assertEquals("#red,green,blue", result);
+
+        // {#keys} => #semi,;,dot,.,comma,,
+        result = new URITemplate("{#keys}").expand(vars).toString();
+        Assertions.assertEquals("#semi,;,dot,.,comma,,", result);
+
+        // {#keys*} => #semi=;,dot=.,comma=,
+        result = new URITemplate("{#keys*}").expand(vars).toString();
+        Assertions.assertEquals("#semi=;,dot=.,comma=,", result);
+    }
+
+    @Test
+    void testLevel4_labelExpansionWithValueModifiers() throws URISyntaxException {
+        // X{.var:3} => X.val
+        String result = new URITemplate("X{.var:3}").expand(vars).toString();
+        Assertions.assertEquals("X.val", result);
+
+        // X{.list} => X.red,green,blue
+        result = new URITemplate("X{.list}").expand(vars).toString();
+        Assertions.assertEquals("X.red,green,blue", result);
+
+        // X{.list*} => X.red.green.blue
+        result = new URITemplate("X{.list*}").expand(vars).toString();
+        Assertions.assertEquals("X.red.green.blue", result);
+
+        // X{.keys} => X.semi,%3B,dot,.,comma,%2C
+        result = new URITemplate("X{.keys}").expand(vars).toString();
+        Assertions.assertEquals("X.semi,%3B,dot,.,comma,%2C", result);
+
+        // X{.keys*} => X.semi=%3B.dot=..comma=%2C
+        result = new URITemplate("X{.keys*}").expand(vars).toString();
+        Assertions.assertEquals("X.semi=%3B.dot=..comma=%2C", result);
+    }
+
+    @Test
+    void testLevel4_pathSegmentsWithValueModifiers() throws URISyntaxException {
+        // {/var:1,var} => /v/value
+        String result = new URITemplate("{/var:1,var}").expand(vars).toString();
+        Assertions.assertEquals("/v/value", result);
+
+        // {/list} => /red,green,blue
+        result = new URITemplate("{/list}").expand(vars).toString();
+        Assertions.assertEquals("/red,green,blue", result);
+
+        // {/list*} => /red/green/blue
+        result = new URITemplate("{/list*}").expand(vars).toString();
+        Assertions.assertEquals("/red/green/blue", result);
+
+        // {/list*,path:4} => /red/green/blue/%2Ffoo
+        // "path" = "/foo/bar", truncated to 4 => "/foo", then percent-encoded => "%2Ffoo"
+        result = new URITemplate("{/list*,path:4}").expand(vars).toString();
+        Assertions.assertEquals("/red/green/blue/%2Ffoo", result);
+
+        // {/keys} => /semi,%3B,dot,.,comma,%2C
+        result = new URITemplate("{/keys}").expand(vars).toString();
+        Assertions.assertEquals("/semi,%3B,dot,.,comma,%2C", result);
+
+        // {/keys*} => /semi=%3B/dot=./comma=%2C
+        result = new URITemplate("{/keys*}").expand(vars).toString();
+        Assertions.assertEquals("/semi=%3B/dot=./comma=%2C", result);
+    }
+
+    @Test
+    void testLevel4_pathStyleParametersWithValueModifiers() throws URISyntaxException {
+        // {;hello:5} => ;hello=Hello
+        String result = new URITemplate("{;hello:5}").expand(vars).toString();
+        Assertions.assertEquals(";hello=Hello", result);
+
+        // {;list} => ;list=red,green,blue
+        result = new URITemplate("{;list}").expand(vars).toString();
+        Assertions.assertEquals(";list=red,green,blue", result);
+
+        // {;list*} => ;list=red;list=green;list=blue
+        result = new URITemplate("{;list*}").expand(vars).toString();
+        Assertions.assertEquals(";list=red;list=green;list=blue", result);
+
+        // {;keys} => ;keys=semi,%3B,dot,.,comma,%2C
+        result = new URITemplate("{;keys}").expand(vars).toString();
+        Assertions.assertEquals(";keys=semi,%3B,dot,.,comma,%2C", result);
+
+        // {;keys*} => ;semi=%3B;dot=.;comma=%2C
+        result = new URITemplate("{;keys*}").expand(vars).toString();
+        Assertions.assertEquals(";semi=%3B;dot=.;comma=%2C", result);
+    }
+
+    @Test
+    void testLevel4_formStyleQueryWithValueModifiers() throws URISyntaxException {
+        // {?var:3} => ?var=val
+        String result = new URITemplate("{?var:3}").expand(vars).toString();
+        Assertions.assertEquals("?var=val", result);
+
+        // {?list} => ?list=red,green,blue
+        result = new URITemplate("{?list}").expand(vars).toString();
+        Assertions.assertEquals("?list=red,green,blue", result);
+
+        // {?list*} => ?list=red&list=green&list=blue
+        result = new URITemplate("{?list*}").expand(vars).toString();
+        Assertions.assertEquals("?list=red&list=green&list=blue", result);
+
+        // {?keys} => ?keys=semi,%3B,dot,.,comma,%2C
+        result = new URITemplate("{?keys}").expand(vars).toString();
+        Assertions.assertEquals("?keys=semi,%3B,dot,.,comma,%2C", result);
+
+        // {?keys*} => ?semi=%3B&dot=.&comma=%2C
+        result = new URITemplate("{?keys*}").expand(vars).toString();
+        Assertions.assertEquals("?semi=%3B&dot=.&comma=%2C", result);
+    }
+
+    @Test
+    void testLevel4_formStyleQueryContinuationWithValueModifiers() throws URISyntaxException {
+        // {&var:3} => &var=val
+        String result = new URITemplate("{&var:3}").expand(vars).toString();
+        Assertions.assertEquals("&var=val", result);
+
+        // {&list} => &list=red,green,blue
+        result = new URITemplate("{&list}").expand(vars).toString();
+        Assertions.assertEquals("&list=red,green,blue", result);
+
+        // {&list*} => &list=red&list=green&list=blue
+        result = new URITemplate("{&list*}").expand(vars).toString();
+        Assertions.assertEquals("&list=red&list=green&list=blue", result);
+
+        // {&keys} => &keys=semi,%3B,dot,.,comma,%2C
+        result = new URITemplate("{&keys}").expand(vars).toString();
+        Assertions.assertEquals("&keys=semi,%3B,dot,.,comma,%2C", result);
+
+        // {&keys*} => &semi=%3B&dot=.&comma=%2C
+        result = new URITemplate("{&keys*}").expand(vars).toString();
+        Assertions.assertEquals("&semi=%3B&dot=.&comma=%2C", result);
+    }
+
+    @Test
+    void testUriTemplateAdvancedExamples() throws URISyntaxException {
+        final Map<String, Object> vars = new HashMap<>();
+        vars.put("var", "value");
+        vars.put("hello", "Hello World!");
+        vars.put("half", "50%");
+        vars.put("empty", "");
+        vars.put("undef", null);
+        vars.put("x", "1024");
+        vars.put("y", "768");
+        vars.put("list", Arrays.asList("red", "green", "blue"));
+
+        final Map<String, String> keys = new LinkedHashMap<>(); // Ensure insertion order
+        keys.put("semi", ";");
+        keys.put("dot", ".");
+        keys.put("comma", ",");
+        vars.put("keys", keys);
+
+        vars.put("base", "http://example.com/home/");
+        vars.put("path", "/foo/bar");
+        vars.put("who", "fred");
+        vars.put("v", "6");
+        vars.put("dub", "me/too");
+        vars.put("dom", Arrays.asList("example", "com"));
+
+        // + Operator
+        Assertions.assertEquals("value", new URITemplate("{+var}").expand(vars).toString());
+        Assertions.assertEquals("Hello%20World!", new URITemplate("{+hello}").expand(vars).toString());
+        Assertions.assertEquals("50%25", new URITemplate("{+half}").expand(vars).toString());
+        Assertions.assertEquals("http://example.com/home/index", new URITemplate("{+base}index").expand(vars).toString());
+        Assertions.assertEquals("OX", new URITemplate("O{+empty}X").expand(vars).toString());
+        Assertions.assertEquals("OX", new URITemplate("O{+undef}X").expand(vars).toString());
+        Assertions.assertEquals("/foo/bar/here", new URITemplate("{+path}/here").expand(vars).toString());
+        Assertions.assertEquals("here?ref=/foo/bar", new URITemplate("here?ref={+path}").expand(vars).toString());
+        Assertions.assertEquals("up/foo/barvalue/here", new URITemplate("up{+path}{var}/here").expand(vars).toString());
+        Assertions.assertEquals("1024,Hello%20World!,768", new URITemplate("{+x,hello,y}").expand(vars).toString());
+        Assertions.assertEquals("/foo/bar,1024/here", new URITemplate("{+path,x}/here").expand(vars).toString());
+        Assertions.assertEquals("/foo/b/here", new URITemplate("{+path:6}/here").expand(vars).toString());
+        Assertions.assertEquals("red,green,blue", new URITemplate("{+list}").expand(vars).toString());
+        Assertions.assertEquals("red,green,blue", new URITemplate("{+list*}").expand(vars).toString());
+        Assertions.assertEquals("semi,;,dot,.,comma,,", new URITemplate("{+keys}").expand(vars).toString());
+        Assertions.assertEquals("semi=;,dot=.,comma=,", new URITemplate("{+keys*}").expand(vars).toString());
+
+        // # Operator
+        Assertions.assertEquals("#value", new URITemplate("{#var}").expand(vars).toString());
+        Assertions.assertEquals("#Hello%20World!", new URITemplate("{#hello}").expand(vars).toString());
+        Assertions.assertEquals("#50%25", new URITemplate("{#half}").expand(vars).toString());
+        Assertions.assertEquals("foo#", new URITemplate("foo{#empty}").expand(vars).toString());
+        Assertions.assertEquals("foo", new URITemplate("foo{#undef}").expand(vars).toString());
+        Assertions.assertEquals("#1024,Hello%20World!,768", new URITemplate("{#x,hello,y}").expand(vars).toString());
+        Assertions.assertEquals("#/foo/bar,1024/here", new URITemplate("{#path,x}/here").expand(vars).toString());
+        Assertions.assertEquals("#/foo/b/here", new URITemplate("{#path:6}/here").expand(vars).toString());
+        Assertions.assertEquals("#red,green,blue", new URITemplate("{#list}").expand(vars).toString());
+        Assertions.assertEquals("#red,green,blue", new URITemplate("{#list*}").expand(vars).toString());
+        Assertions.assertEquals("#semi,;,dot,.,comma,,", new URITemplate("{#keys}").expand(vars).toString());
+        Assertions.assertEquals("#semi=;,dot=.,comma=,", new URITemplate("{#keys*}").expand(vars).toString());
+
+        // . Operator
+        Assertions.assertEquals(".fred", new URITemplate("{.who}").expand(vars).toString());
+        Assertions.assertEquals(".fred.fred", new URITemplate("{.who,who}").expand(vars).toString());
+        Assertions.assertEquals(".50%25.fred", new URITemplate("{.half,who}").expand(vars).toString());
+        Assertions.assertEquals("www.example.com", new URITemplate("www{.dom*}").expand(vars).toString());
+        Assertions.assertEquals("X.value", new URITemplate("X{.var}").expand(vars).toString());
+        Assertions.assertEquals("X.", new URITemplate("X{.empty}").expand(vars).toString());
+        Assertions.assertEquals("X", new URITemplate("X{.undef}").expand(vars).toString());
+        Assertions.assertEquals("X.val", new URITemplate("X{.var:3}").expand(vars).toString());
+        Assertions.assertEquals("X.red,green,blue", new URITemplate("X{.list}").expand(vars).toString());
+        Assertions.assertEquals("X.red.green.blue", new URITemplate("X{.list*}").expand(vars).toString());
+        Assertions.assertEquals("X.semi,%3B,dot,.,comma,%2C", new URITemplate("X{.keys}").expand(vars).toString());
+        Assertions.assertEquals("X.semi=%3B.dot=..comma=%2C", new URITemplate("X{.keys*}").expand(vars).toString());
+        Assertions.assertEquals("X", new URITemplate("X{.empty_keys}").expand(vars).toString());
+        Assertions.assertEquals("X", new URITemplate("X{.empty_keys*}").expand(vars).toString());
+
+    }
+
+    @Test
+    void testUriTemplateExamples() throws URISyntaxException {
+
+        final Map<String, Object> vars = new HashMap<>();
+        vars.put("count", Arrays.asList("one", "two", "three"));
+        vars.put("dom", Arrays.asList("example", "com"));
+        vars.put("dub", "me/too");
+        vars.put("hello", "Hello World!");
+        vars.put("half", "50%");
+        vars.put("var", "value");
+        vars.put("who", "fred");
+        vars.put("base", "http://example.com/home/");
+        vars.put("path", "/foo/bar");
+        vars.put("list", Arrays.asList("red", "green", "blue"));
+        vars.put("keys", new LinkedHashMap<String, String>() {{
+            put("semi", ";");
+            put("dot", ".");
+            put("comma", ",");
+        }});
+        vars.put("v", "6");
+        vars.put("x", "1024");
+        vars.put("y", "768");
+        vars.put("empty", "");
+        vars.put("empty_keys", new ArrayList<>());
+        vars.put("undef", null);
+
+        // Test cases for various operators and patterns
+        assertExpansion(vars,"{count}", "one,two,three");
+        assertExpansion(vars,"{count*}", "one,two,three");
+        assertExpansion(vars,"{/count}", "/one,two,three");
+        assertExpansion(vars,"{/count*}", "/one/two/three");
+        assertExpansion(vars,"{;count}", ";count=one,two,three");
+        assertExpansion(vars,"{;count*}", ";count=one;count=two;count=three");
+        assertExpansion(vars,"{?count}", "?count=one,two,three");
+        assertExpansion(vars,"{?count*}", "?count=one&count=two&count=three");
+        assertExpansion(vars,"{&count*}", "&count=one&count=two&count=three");
+
+        assertExpansion(vars,"{var}", "value");
+        assertExpansion(vars,"{hello}", "Hello%20World%21");
+        assertExpansion(vars,"{half}", "50%25");
+        assertExpansion(vars,"O{empty}X", "OX");
+        assertExpansion(vars,"O{undef}X", "OX");
+        assertExpansion(vars,"{x,y}", "1024,768");
+        assertExpansion(vars,"{x,hello,y}", "1024,Hello%20World%21,768");
+        assertExpansion(vars,"?{x,empty}", "?1024,");
+        assertExpansion(vars,"?{x,undef}", "?1024");
+        assertExpansion(vars,"?{undef,y}", "?768");
+        assertExpansion(vars,"{var:3}", "val");
+        assertExpansion(vars,"{var:30}", "value");
+        assertExpansion(vars,"{list}", "red,green,blue");
+        assertExpansion(vars,"{list*}", "red,green,blue");
+        assertExpansion(vars,"{keys}", "semi,%3B,dot,.,comma,%2C");
+        assertExpansion(vars,"{keys*}", "semi=%3B,dot=.,comma=%2C");
+
+        // Continue with other examples, adapting the pattern to match the operator used
+        assertExpansion(vars,"{+var}", "value");
+        assertExpansion(vars,"{+hello}", "Hello%20World!");
+        assertExpansion(vars,"{+half}", "50%25");
+        assertExpansion(vars,"{base}index", "http%3A%2F%2Fexample.com%2Fhome%2Findex");
+        assertExpansion(vars,"{+base}index", "http://example.com/home/index");
+        assertExpansion(vars,"O{+empty}X", "OX");
+        assertExpansion(vars,"O{+undef}X", "OX");
+        assertExpansion(vars,"{+path}/here", "/foo/bar/here");
+        assertExpansion(vars,"here?ref={+path}", "here?ref=/foo/bar");
+        assertExpansion(vars,"up{+path}{var}/here", "up/foo/barvalue/here");
+        assertExpansion(vars,"{+x,hello,y}", "1024,Hello%20World!,768");
+        assertExpansion(vars,"{+path,x}/here", "/foo/bar,1024/here");
+        assertExpansion(vars,"{+path:6}/here", "/foo/b/here");
+        assertExpansion(vars,"{+list}", "red,green,blue");
+        assertExpansion(vars,"{+list*}", "red,green,blue");
+        assertExpansion(vars,"{+keys}", "semi,;,dot,.,comma,,");
+        assertExpansion(vars,"{+keys*}", "semi=;,dot=.,comma=,");
+
+    }
+
+    private void assertExpansion(final Map<String, Object> vars, final String template, final String expected) throws URISyntaxException {
+        final URIBuilder expanded = new URITemplate(template).expand(vars);
+        Assertions.assertEquals(expected, expanded.toString(), "Expansion of '" + template + "' failed");
+    }
+
+
+
+    @Test
+    void testMatchSimpleVariables() {
+        final URITemplate template = new URITemplate("/users/{userId}/orders/{orderId}");
+        final Map<String, String> result = template.match("/users/123/orders/456");
+        Assertions.assertEquals("123", result.get("userId"));
+        Assertions.assertEquals("456", result.get("orderId"));
+    }
+
+    @Test
+    void testMatchWithExtraSegments() {
+        final URITemplate template = new URITemplate("/products/{productId}");
+        final Map<String, String> result = template.match("/products/987/details");
+        Assertions.assertTrue(result.isEmpty(), "Should not match extra segments");
+    }
+
+    @Test
+    void testMatchNoVariables() {
+        final URITemplate template = new URITemplate("/static/path");
+        final Map<String, String> result = template.match("/static/path");
+        Assertions.assertTrue(result.isEmpty(), "No variables expected");
+    }
+
+    @Test
+    void testMatchWithSpecialCharacters() {
+        final URITemplate template = new URITemplate("/files/{fileName}");
+        final Map<String, String> result = template.match("/files/special%20file.txt");
+        Assertions.assertEquals("special%20file.txt", result.get("fileName"));
+    }
+
+    @Test
+    void testMatchWithEmptyTemplate() {
+        Assertions.assertThrows(IllegalArgumentException.class, () -> new URITemplate(""));
+    }
+
+    @Test
+    void testMatchVariableNotPresent() {
+        final URITemplate template = new URITemplate("/categories/{categoryId}/items/{itemId}");
+        final Map<String, String> result = template.match("/categories/42");
+        Assertions.assertTrue(result.isEmpty(), "Partial match should not extract variables");
+    }
+
+    @Test
+    void testMatchUriWithQueryString() {
+        final URITemplate template = new URITemplate("/search/{query}");
+        final Map<String, String> result = template.match("/search/laptops?sort=price");
+        Assertions.assertEquals("laptops", result.get("query"));
+    }
+
+    @Test
+    void testMatchComplexTemplate() {
+        final URITemplate template = new URITemplate("/store/{storeId}/product/{productId}/details");
+        final Map<String, String> result = template.match("/store/101/product/202/details");
+        Assertions.assertEquals("101", result.get("storeId"));
+        Assertions.assertEquals("202", result.get("productId"));
+    }
+
+    @Test
+    void testMatchTemplateWithoutDelimiters() {
+        final URITemplate template = new URITemplate("{param1}-{param2}");
+        final Map<String, String> result = template.match("value1-value2");
+        Assertions.assertEquals("value1", result.get("param1"));
+        Assertions.assertEquals("value2", result.get("param2"));
+    }
+
+
 }
