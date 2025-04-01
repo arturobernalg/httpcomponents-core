@@ -169,6 +169,35 @@ public class MessageSupport {
     }
 
     /**
+     * @since 5.3
+     */
+    public static void parseHeader(final Header header, final BiConsumer<CharSequence, ParserCursor> consumer) {
+        Args.notNull(header, "Header");
+        if (header instanceof FormattedHeader) {
+            final CharArrayBuffer buf = ((FormattedHeader) header).getBuffer();
+            final ParserCursor cursor = new ParserCursor(0, buf.length());
+            cursor.updatePos(((FormattedHeader) header).getValuePos());
+            consumer.accept(buf, cursor);
+        } else {
+            final String value = header.getValue();
+            final ParserCursor cursor = new ParserCursor(0, value.length());
+            consumer.accept(value, cursor);
+        }
+    }
+
+    /**
+     * @since 5.3
+     */
+    public static void parseHeaders(final MessageHeaders headers, final String name, final BiConsumer<CharSequence, ParserCursor> consumer) {
+        Args.notNull(headers, "Message headers");
+        Args.notBlank(name, "Header name");
+        final Iterator<Header> it = headers.headerIterator(name);
+        while (it.hasNext()) {
+            parseHeader(it.next(), consumer);
+        }
+    }
+
+    /**
      * @since 5.4
      */
     public static void parseHeader(final Header header, final BiConsumer<CharSequence, ParserCursor> consumer) {
