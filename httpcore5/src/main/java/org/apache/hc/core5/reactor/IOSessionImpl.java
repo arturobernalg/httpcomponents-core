@@ -32,6 +32,7 @@ import java.net.SocketAddress;
 import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.channels.ByteChannel;
+import java.nio.channels.CancelledKeyException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.Deque;
@@ -112,7 +113,11 @@ class IOSessionImpl implements IOSession {
             commandQueue.add(command);
         }
         if (status.get() == Status.ACTIVE) {
-            setEvent(SelectionKey.OP_WRITE);
+            try {
+                setEvent(SelectionKey.OP_WRITE);
+            } catch (final CancelledKeyException ignore) {
+                command.cancel();
+            }
         } else {
             command.cancel();
         }
