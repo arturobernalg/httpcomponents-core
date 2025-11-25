@@ -53,7 +53,7 @@ import org.apache.hc.core5.util.TextUtils;
  */
 public final class DefaultH2RequestConverter implements H2MessageConverter<HttpRequest> {
 
-    public final static DefaultH2RequestConverter INSTANCE = new DefaultH2RequestConverter();
+    public static final DefaultH2RequestConverter INSTANCE = new DefaultH2RequestConverter();
 
     @Override
     public HttpRequest convert(final List<Header> headers) throws HttpException {
@@ -124,23 +124,36 @@ public final class DefaultH2RequestConverter implements H2MessageConverter<HttpR
             if (path != null) {
                 throw new ProtocolException("Header '%s' must not be set for CONNECT request", H2PseudoRequestHeaders.PATH);
             }
-        } else {
-            if (scheme == null) {
-                throw new ProtocolException("Mandatory request header '%s' not found", H2PseudoRequestHeaders.SCHEME);
+            final BasicHttpRequest request = new BasicHttpRequest(method, authority);
+            request.setVersion(HttpVersion.HTTP_2);
+            try {
+                request.setAuthority(URIAuthority.create(authority));
+            } catch (final URISyntaxException ex) {
+                throw new ProtocolException(ex.getMessage(), ex);
             }
-            if (path == null) {
-                throw new ProtocolException("Mandatory request header '%s' not found", H2PseudoRequestHeaders.PATH);
+            for (int i = 0; i < messageHeaders.size(); i++) {
+                request.addHeader(messageHeaders.get(i));
             }
-            validatePathPseudoHeader(method, scheme, path);
+            return request;
         }
+
+        if (scheme == null) {
+            throw new ProtocolException("Mandatory request header '%s' not found", H2PseudoRequestHeaders.SCHEME);
+        }
+        if (path == null) {
+            throw new ProtocolException("Mandatory request header '%s' not found", H2PseudoRequestHeaders.PATH);
+        }
+        validatePathPseudoHeader(method, scheme, path);
 
         final HttpRequest httpRequest = new BasicHttpRequest(method, path);
         httpRequest.setVersion(HttpVersion.HTTP_2);
         httpRequest.setScheme(scheme);
-        try {
-            httpRequest.setAuthority(URIAuthority.create(authority));
-        } catch (final URISyntaxException ex) {
-            throw new ProtocolException(ex.getMessage(), ex);
+        if (authority != null) {
+            try {
+                httpRequest.setAuthority(URIAuthority.create(authority));
+            } catch (final URISyntaxException ex) {
+                throw new ProtocolException(ex.getMessage(), ex);
+            }
         }
         httpRequest.setPath(path);
         for (int i = 0; i < messageHeaders.size(); i++) {
@@ -154,8 +167,8 @@ public final class DefaultH2RequestConverter implements H2MessageConverter<HttpR
         if (TextUtils.isBlank(message.getMethod())) {
             throw new ProtocolException("Request method is empty");
         }
-        final boolean optionMethod = Method.CONNECT.name().equalsIgnoreCase(message.getMethod());
-        if (optionMethod) {
+        final boolean connectMethod = Method.CONNECT.name().equalsIgnoreCase(message.getMethod());
+        if (connectMethod) {
             if (message.getAuthority() == null) {
                 throw new ProtocolException("CONNECT request authority is not set");
             }
@@ -170,14 +183,15 @@ public final class DefaultH2RequestConverter implements H2MessageConverter<HttpR
                 throw new ProtocolException("Request path is not set");
             }
         }
+
         final List<Header> headers = new ArrayList<>();
         headers.add(new BasicHeader(H2PseudoRequestHeaders.METHOD, message.getMethod(), false));
-        if (optionMethod) {
-            headers.add(new BasicHeader(H2PseudoRequestHeaders.AUTHORITY, message.getAuthority(), false));
+        if (connectMethod) {
+            headers.add(new BasicHeader(H2PseudoRequestHeaders.AUTHORITY, message.getAuthority().toString(), false));
         } else {
             headers.add(new BasicHeader(H2PseudoRequestHeaders.SCHEME, message.getScheme(), false));
             if (message.getAuthority() != null) {
-                headers.add(new BasicHeader(H2PseudoRequestHeaders.AUTHORITY, message.getAuthority(), false));
+                headers.add(new BasicHeader(H2PseudoRequestHeaders.AUTHORITY, message.getAuthority().toString(), false));
             }
             headers.add(new BasicHeader(H2PseudoRequestHeaders.PATH, message.getPath(), false));
         }
@@ -200,20 +214,6 @@ public final class DefaultH2RequestConverter implements H2MessageConverter<HttpR
 
     /**
      * Validates the {@code :path} pseudo-header field based on the provided HTTP method and scheme.
-     * <p>
-     * This method performs the following validations:
-     * </p>
-     * <ul>
-     *     <li><strong>Non-Empty Path:</strong> For 'http' or 'https' URIs, the {@code :path} pseudo-header field must not be empty.</li>
-     *     <li><strong>OPTIONS Method:</strong> If the HTTP method is OPTIONS and the URI does not contain a path component,
-     *         the {@code :path} pseudo-header field must have a value of '*'. </li>
-     *     <li><strong>Path Starting with '/':</strong> For 'http' or 'https' URIs, the {@code :path} pseudo-header field must either start with '/' or be '*'. </li>
-     * </ul>
-     *
-     * @param method The HTTP method of the request, e.g., GET, POST, OPTIONS, etc.
-     * @param scheme The scheme of the request, e.g., http or https.
-     * @param path The value of the {@code :path} pseudo-header field.
-     * @throws ProtocolException if any of the validations fail.
      */
     private void validatePathPseudoHeader(final String method, final String scheme, final String path) throws ProtocolException {
         if (URIScheme.HTTP.name().equalsIgnoreCase(scheme) || URIScheme.HTTPS.name().equalsIgnoreCase(scheme)) {
@@ -233,4 +233,5 @@ public final class DefaultH2RequestConverter implements H2MessageConverter<HttpR
             }
         }
     }
+
 }

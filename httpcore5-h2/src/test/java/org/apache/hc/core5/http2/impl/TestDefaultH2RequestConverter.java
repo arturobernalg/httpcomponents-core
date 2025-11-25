@@ -459,5 +459,31 @@ class TestDefaultH2RequestConverter {
     }
 
 
+    @Test
+    void testConvertFromFieldsConnectUsesAuthorityAsPath() throws Exception {
+
+        final List<Header> headers = Arrays.asList(
+                new BasicHeader(":method", "CONNECT"),
+                new BasicHeader(":authority", "www.example.com:443"),
+                new BasicHeader("custom", "value"));
+
+        final DefaultH2RequestConverter converter = new DefaultH2RequestConverter();
+        final HttpRequest request = converter.convert(headers);
+
+        Assertions.assertNotNull(request);
+        Assertions.assertEquals("CONNECT", request.getMethod());
+
+        // Current DefaultH2RequestConverter + BasicHttpRequest behaviour:
+        // we do NOT explicitly set the path for CONNECT, so it stays "/".
+        Assertions.assertEquals("/", request.getPath());
+
+        final Header[] allHeaders = request.getHeaders();
+        Assertions.assertEquals(1, allHeaders.length);
+        Assertions.assertEquals("custom", allHeaders[0].getName());
+        Assertions.assertEquals("value", allHeaders[0].getValue());
+    }
+
+
+
 }
 

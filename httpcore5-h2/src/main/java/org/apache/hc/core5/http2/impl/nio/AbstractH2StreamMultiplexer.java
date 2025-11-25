@@ -47,12 +47,14 @@ import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLSession;
 
 import org.apache.hc.core5.concurrent.CancellableDependency;
+import org.apache.hc.core5.concurrent.FutureCallback;
 import org.apache.hc.core5.http.ConnectionClosedException;
 import org.apache.hc.core5.http.EndpointDetails;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpConnection;
 import org.apache.hc.core5.http.HttpException;
 import org.apache.hc.core5.http.HttpHeaders;
+import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.http.HttpStreamResetException;
 import org.apache.hc.core5.http.HttpVersion;
 import org.apache.hc.core5.http.ProtocolException;
@@ -87,6 +89,7 @@ import org.apache.hc.core5.http2.hpack.HPackDecoder;
 import org.apache.hc.core5.http2.hpack.HPackEncoder;
 import org.apache.hc.core5.http2.impl.BasicH2TransportMetrics;
 import org.apache.hc.core5.http2.nio.AsyncPingHandler;
+import org.apache.hc.core5.http2.nio.command.H2TunnelCommand;
 import org.apache.hc.core5.http2.nio.command.PingCommand;
 import org.apache.hc.core5.http2.nio.command.PushResponseCommand;
 import org.apache.hc.core5.http2.priority.PriorityParamsParser;
@@ -96,6 +99,7 @@ import org.apache.hc.core5.reactor.Command;
 import org.apache.hc.core5.reactor.ProtocolIOSession;
 import org.apache.hc.core5.reactor.ssl.TlsDetails;
 import org.apache.hc.core5.util.Args;
+import org.apache.hc.core5.util.Asserts;
 import org.apache.hc.core5.util.ByteArrayBuffer;
 import org.apache.hc.core5.util.Identifiable;
 import org.apache.hc.core5.util.Timeout;
@@ -526,6 +530,11 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
                     executePush((PushResponseCommand) command);
                 } else if (command instanceof StaleCheckCommand) {
                     executeStaleCheck((StaleCheckCommand) command);
+                } else if (command instanceof H2TunnelCommand) {
+                    final H2TunnelCommand tunnelCommand = (H2TunnelCommand) command;
+                    if (!tunnelCommand.isCancelled()) {
+                        executeTunnel(tunnelCommand);
+                    }
                 }
                 if (!outputQueue.isEmpty()) {
                     return;
@@ -1583,5 +1592,49 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
         }
 
     }
+
+    void executeTunnel(final H2TunnelCommand command) throws IOException, HttpException {
+        if (goAwayReceived) {
+            final FutureCallback<ProtocolIOSession> callback = command.getCallback();
+            if (!command.isCancelled() && callback != null) {
+                callback.failed(new H2ConnectionException(H2Error.REFUSED_STREAM, "Connection is going away"));
+            }
+            return;
+        }
+
+        final int streamId = streams.generateStreamId();
+        Asserts.check(streamId > 0, "Stream id exhausted");
+
+        final H2StreamChannel channel = createChannel(streamId);
+
+        final HttpHost targetHost = command.getTargetHost();
+
+        final H2StreamProtocolIOSession tunnelSession = new H2StreamProtocolIOSession(
+                ioSession.getId() + "-tunnel-" + streamId,
+                targetHost,
+                channel);
+
+        final H2TunnelStreamHandler streamHandler = new H2TunnelStreamHandler(
+                channel,
+                null,
+                tunnelSession,
+                command.getCallback(),
+                targetHost);
+
+        final H2Stream stream = streams.createActive(channel, streamHandler);
+
+        if (streamListener != null) {
+            final int initInputWindow = stream.getInputWindow().get();
+            streamListener.onInputFlowControl(this, streamId, initInputWindow, initInputWindow);
+            final int initOutputWindow = stream.getOutputWindow().get();
+            streamListener.onOutputFlowControl(this, streamId, initOutputWindow, initOutputWindow);
+        }
+
+        if (stream.isOutputReady()) {
+            stream.produceOutput();
+        }
+        requestSessionOutput();
+    }
+
 
 }

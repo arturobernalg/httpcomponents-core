@@ -33,13 +33,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.stream.IntStream;
 
+import org.apache.hc.core5.concurrent.FutureCallback;
 import org.apache.hc.core5.function.Supplier;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpException;
 import org.apache.hc.core5.http.HttpHeaders;
+import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.http.config.CharCodingConfig;
 import org.apache.hc.core5.http.impl.CharCodingSupport;
 import org.apache.hc.core5.http.message.BasicHeader;
@@ -63,8 +66,10 @@ import org.apache.hc.core5.http2.frame.FrameType;
 import org.apache.hc.core5.http2.frame.RawFrame;
 import org.apache.hc.core5.http2.frame.StreamIdGenerator;
 import org.apache.hc.core5.http2.hpack.HPackEncoder;
+import org.apache.hc.core5.http2.nio.command.H2TunnelCommand;
 import org.apache.hc.core5.reactor.ProtocolIOSession;
 import org.apache.hc.core5.util.ByteArrayBuffer;
+import org.apache.hc.core5.util.Timeout;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -1000,7 +1005,6 @@ class TestAbstractH2StreamMultiplexer {
         mux.onConnect();
         writes.clear();
 
-        // Server SETTINGS with 0x9 = 1
         final WritableByteChannelMock w = new WritableByteChannelMock(256);
         final FrameOutputBuffer fob = new FrameOutputBuffer(16 * 1024);
         final ByteBuffer pl = ByteBuffer.allocate(6);
@@ -1033,6 +1037,62 @@ class TestAbstractH2StreamMultiplexer {
                 .findFirst().orElse(-1);
         Assertions.assertTrue(idxPriUpd >= 0, "PRIORITY_UPDATE should be emitted when NO_RFC7540=1");
     }
+
+    @Test
+    void testOnOutputProcessesH2TunnelCommand() throws Exception {
+        final H2Config h2Config = H2Config.custom()
+                .build();
+
+        final AbstractH2StreamMultiplexer streamMultiplexer = new H2StreamMultiplexerImpl(
+                protocolIOSession,
+                FRAME_FACTORY,
+                StreamIdGenerator.ODD,
+                httpProcessor,
+                CharCodingConfig.DEFAULT,
+                h2Config,
+                h2StreamListener,
+                () -> streamHandler);
+
+        final WritableByteChannelMock writableChannel = new WritableByteChannelMock(128);
+        final FrameOutputBuffer frameOutputBuffer = new FrameOutputBuffer(16 * 1024);
+        final RawFrame settingsFrame = new RawFrame(
+                FrameType.SETTINGS.getValue(), 0, 0, ByteBuffer.allocate(0));
+        frameOutputBuffer.write(settingsFrame, writableChannel);
+        streamMultiplexer.onInput(ByteBuffer.wrap(writableChannel.toByteArray()));
+
+        final HttpHost target = new HttpHost("example.com", 443);
+
+        final AtomicBoolean callbackCalled = new AtomicBoolean(false);
+        final FutureCallback<ProtocolIOSession> callback = new FutureCallback<ProtocolIOSession>() {
+            @Override
+            public void completed(final ProtocolIOSession result) {
+                callbackCalled.set(true);
+            }
+
+            @Override
+            public void failed(final Exception ex) {
+            }
+
+            @Override
+            public void cancelled() {
+            }
+        };
+
+        final H2TunnelCommand tunnelCommand = new H2TunnelCommand(
+                target,
+                Timeout.ofSeconds(5),
+                callback);
+
+        Mockito.when(protocolIOSession.poll())
+                .thenReturn(tunnelCommand)
+                .thenReturn(null);
+
+        Assertions.assertDoesNotThrow(streamMultiplexer::onOutput);
+
+        Mockito.verify(protocolIOSession, Mockito.atLeastOnce()).poll();
+    }
+
+
 
 }
 
