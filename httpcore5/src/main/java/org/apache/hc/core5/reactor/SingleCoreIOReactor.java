@@ -88,7 +88,7 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
             final IOSessionListener sessionListener,
             final IOReactorMetricsListener threadPoolListener,
             final Callback<IOSession> sessionShutdownCallback) {
-        super(exceptionCallback);
+        super(exceptionCallback, reactorConfig != null ? reactorConfig.getSelectorProvider() : null);
         this.eventHandlerFactory = Args.notNull(eventHandlerFactory, "Event handler factory");
         this.reactorConfig = Args.notNull(reactorConfig, "I/O reactor config");
         this.ioSessionDecorator = ioSessionDecorator;
@@ -324,7 +324,7 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
     private void validateAddress(final SocketAddress address) throws UnknownHostException {
         if (address instanceof InetSocketAddress) {
             final InetSocketAddress endpoint = (InetSocketAddress) address;
-            if (endpoint.isUnresolved()) {
+            if (endpoint.isUnresolved() && !isVsockAddress(endpoint)) {
                 throw new UnknownHostException(endpoint.getHostName());
             }
         }
@@ -361,6 +361,13 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
     }
 
     private static SocketChannel openSocketFor(final SocketAddress remoteAddress) throws IOException {
+        if (VsockSupport.isVsockAddress(remoteAddress)) {
+            try {
+                return VsockSupport.openVsockChannel();
+            } catch (final ReflectiveOperationException ex) {
+                throw new UnsupportedOperationException("AF_VSOCK socket channels not supported", ex);
+            }
+        }
         if (remoteAddress instanceof InetSocketAddress) {
             return SocketChannel.open();
         }
@@ -370,6 +377,10 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         } catch (final ReflectiveOperationException e) {
             throw new UnsupportedOperationException("UNIX-family socket channels not supported", e);
         }
+    }
+
+    private static boolean isVsockAddress(final SocketAddress remoteAddress) {
+        return VsockSupport.isVsockAddress(remoteAddress);
     }
 
     private void processConnectionRequest(final SocketChannel socketChannel, final IOSessionRequest sessionRequest) throws IOException {

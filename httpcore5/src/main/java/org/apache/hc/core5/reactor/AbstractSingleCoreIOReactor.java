@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.nio.channels.ClosedSelectorException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.nio.channels.spi.SelectorProvider;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -58,12 +59,16 @@ abstract class AbstractSingleCoreIOReactor implements IOReactor {
     final Selector selector;
 
     AbstractSingleCoreIOReactor(final Callback<Exception> exceptionCallback) {
+        this(exceptionCallback, null);
+    }
+
+    AbstractSingleCoreIOReactor(final Callback<Exception> exceptionCallback, final SelectorProvider selectorProvider) {
         super();
         this.exceptionCallback = exceptionCallback;
         this.status = new AtomicReference<>(IOReactorStatus.INACTIVE);
         this.terminated = new AtomicBoolean();
         try {
-            this.selector = Selector.open();
+            this.selector = selectorProvider != null ? selectorProvider.openSelector() : Selector.open();
         } catch (final IOException ex) {
             throw new IllegalStateException("Unexpected failure opening I/O selector", ex);
         }

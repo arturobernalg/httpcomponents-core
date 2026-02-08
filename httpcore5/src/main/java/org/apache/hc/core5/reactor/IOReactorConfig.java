@@ -29,6 +29,7 @@ package org.apache.hc.core5.reactor;
 
 import java.net.SocketAddress;
 import java.net.SocketOptions;
+import java.nio.channels.spi.SelectorProvider;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.hc.core5.annotation.Contract;
@@ -64,6 +65,7 @@ public final class IOReactorConfig {
     private final SocketAddress socksProxyAddress;
     private final String socksProxyUsername;
     private final String socksProxyPassword;
+    private final SelectorProvider selectorProvider;
 
     IOReactorConfig(
             final TimeValue selectInterval,
@@ -82,7 +84,8 @@ public final class IOReactorConfig {
             final int tcpKeepCount,
             final SocketAddress socksProxyAddress,
             final String socksProxyUsername,
-            final String socksProxyPassword) {
+            final String socksProxyPassword,
+            final SelectorProvider selectorProvider) {
         super();
         this.selectInterval = selectInterval;
         this.ioThreadCount = ioThreadCount;
@@ -101,6 +104,7 @@ public final class IOReactorConfig {
         this.socksProxyAddress = socksProxyAddress;
         this.socksProxyUsername = socksProxyUsername;
         this.socksProxyPassword = socksProxyPassword;
+        this.selectorProvider = selectorProvider;
     }
 
     /**
@@ -240,6 +244,14 @@ public final class IOReactorConfig {
         return this.socksProxyPassword;
     }
 
+    /**
+     * @see Builder#setSelectorProvider(SelectorProvider)
+     * @since 5.7
+     */
+    public SelectorProvider getSelectorProvider() {
+        return this.selectorProvider;
+    }
+
     public static Builder custom() {
         return new Builder();
     }
@@ -262,7 +274,8 @@ public final class IOReactorConfig {
             .setTcpKeepCount(config.getTcpKeepCount())
             .setSocksProxyAddress(config.getSocksProxyAddress())
             .setSocksProxyUsername(config.getSocksProxyUsername())
-            .setSocksProxyPassword(config.getSocksProxyPassword());
+            .setSocksProxyPassword(config.getSocksProxyPassword())
+            .setSelectorProvider(config.getSelectorProvider());
     }
 
     public static class Builder {
@@ -311,6 +324,7 @@ public final class IOReactorConfig {
         private SocketAddress socksProxyAddress;
         private String socksProxyUsername;
         private String socksProxyPassword;
+        private SelectorProvider selectorProvider;
 
         Builder() {
             this.selectInterval = TimeValue.ofSeconds(1);
@@ -330,6 +344,7 @@ public final class IOReactorConfig {
             this.socksProxyAddress = null;
             this.socksProxyUsername = null;
             this.socksProxyPassword = null;
+            this.selectorProvider = null;
         }
 
         /**
@@ -596,6 +611,18 @@ public final class IOReactorConfig {
             return this;
         }
 
+        /**
+         * Sets a custom selector provider to be used by the IO reactor.
+         *
+         * @return this instance.
+         * @since 5.7
+         */
+        public Builder setSelectorProvider(final SelectorProvider selectorProvider) {
+            this.selectorProvider = selectorProvider;
+            return this;
+        }
+
+
         public IOReactorConfig build() {
             return new IOReactorConfig(
                     selectInterval != null ? selectInterval : TimeValue.ofSeconds(1),
@@ -608,10 +635,12 @@ public final class IOReactorConfig {
                     trafficClass,
                     sndBufSize, rcvBufSize, backlogSize,
                     tcpKeepIdle, tcpKeepInterval, tcpKeepCount,
-                    socksProxyAddress, socksProxyUsername, socksProxyPassword);
+                    socksProxyAddress, socksProxyUsername, socksProxyPassword,
+                    selectorProvider);
         }
 
     }
+
 
     @Override
     public String toString() {
@@ -628,6 +657,7 @@ public final class IOReactorConfig {
                 .append(", rcvBufSize=").append(this.rcvBufSize)
                 .append(", backlogSize=").append(this.backlogSize)
                 .append(", socksProxyAddress=").append(this.socksProxyAddress)
+                .append(", selectorProvider=").append(this.selectorProvider)
                 .append("]");
         return builder.toString();
     }
