@@ -28,6 +28,7 @@ package org.apache.hc.core5.http2.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -75,6 +76,6 @@ class TestExtendedConnectRequestConverter {
                 break;
             }
         }
-        assertEquals(true, found);
+        assertTrue(found);
     }
 }

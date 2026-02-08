@@ -142,6 +142,9 @@ public final class DefaultH2RequestConverter implements H2MessageConverter<HttpR
                 }
             }
         } else {
+            if (protocol != null) {
+                throw new ProtocolException("Header '%s' must not be set for %s request", H2PseudoRequestHeaders.PROTOCOL, method);
+            }
             if (scheme == null) {
                 throw new ProtocolException("Mandatory request header '%s' not found", H2PseudoRequestHeaders.SCHEME);
             }
