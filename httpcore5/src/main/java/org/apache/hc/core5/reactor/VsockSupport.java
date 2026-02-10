@@ -28,6 +28,7 @@ package org.apache.hc.core5.reactor;
 
 import java.lang.reflect.Method;
 import java.net.InetSocketAddress;
+import java.net.ProtocolFamily;
 import java.net.SocketAddress;
 import java.nio.channels.SocketChannel;
 import java.nio.channels.spi.SelectorProvider;
@@ -41,11 +42,6 @@ import org.apache.hc.core5.annotation.Internal;
  */
 @Internal
 public final class VsockSupport {
-    private static final String[] PROVIDER_CLASS_NAMES = {
-            "org.newsclub.net.unix.vsock.AFVSOCKSelectorProvider",
-            "org.newsclub.net.vsock.AFVSOCKSelectorProvider"
-    };
-
     private VsockSupport() {
     }
 
@@ -54,35 +50,34 @@ public final class VsockSupport {
             return false;
         }
         if (remoteAddress instanceof InetSocketAddress) {
-            final String hostName = ((InetSocketAddress) remoteAddress).getHostName();
-            if (hostName != null && hostName.contains(".vsock.junixsocket")) {
+            final String hostString = ((InetSocketAddress) remoteAddress).getHostString();
+            if (hostString != null && hostString.contains(".vsock.junixsocket")) {
                 return true;
             }
         }
         final String className = remoteAddress.getClass().getName();
         return "org.newsclub.net.unix.AFVSOCKSocketAddress".equals(className)
-            || "org.newsclub.net.vsock.AFVSOCKSocketAddress".equals(className)
-            || "org.newsclub.net.unix.vsock.AFVSOCKSocketAddress".equals(className);
+                || "org.newsclub.net.vsock.AFVSOCKSocketAddress".equals(className)
+                || "org.newsclub.net.unix.vsock.AFVSOCKSocketAddress".equals(className);
     }
 
-    public static SelectorProvider resolveSelectorProvider() throws ReflectiveOperationException {
-        for (final String className : PROVIDER_CLASS_NAMES) {
+    public static SocketChannel openVsockChannel(final SelectorProvider selectorProvider) throws ReflectiveOperationException {
+        final ProtocolFamily vsockFamily = resolveVsockProtocolFamily();
+        final Method openMethod = selectorProvider.getClass().getMethod("openSocketChannel", ProtocolFamily.class);
+        return (SocketChannel) openMethod.invoke(selectorProvider, vsockFamily);
+    }
+
+    private static ProtocolFamily resolveVsockProtocolFamily() throws ReflectiveOperationException {
+        for (final String className : new String[]{
+                "org.newsclub.net.unix.vsock.AFVSOCKProtocolFamily",
+                "org.newsclub.net.vsock.AFVSOCKProtocolFamily"
+        }) {
             try {
-                final Class<?> providerClass = Class.forName(className);
-                try {
-                    return (SelectorProvider) providerClass.getMethod("provider").invoke(null);
-                } catch (final NoSuchMethodException ignore) {
-                }
-                return (SelectorProvider) providerClass.getMethod("getInstance").invoke(null);
+                final Class<?> familyClass = Class.forName(className);
+                return (ProtocolFamily) familyClass.getField("VSOCK").get(null);
             } catch (final ClassNotFoundException ignore) {
             }
         }
-        throw new ClassNotFoundException("AFVSOCKSelectorProvider not found");
-    }
-
-    public static SocketChannel openVsockChannel() throws ReflectiveOperationException {
-        final SelectorProvider provider = resolveSelectorProvider();
-        final Method openMethod = provider.getClass().getMethod("openSocketChannel");
-        return (SocketChannel) openMethod.invoke(provider);
+        throw new ClassNotFoundException("AFVSOCKProtocolFamily not found");
     }
 }

@@ -324,7 +324,7 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
     private void validateAddress(final SocketAddress address) throws UnknownHostException {
         if (address instanceof InetSocketAddress) {
             final InetSocketAddress endpoint = (InetSocketAddress) address;
-            if (endpoint.isUnresolved() && !isVsockAddress(endpoint)) {
+            if (endpoint.isUnresolved() && !VsockSupport.isVsockAddress(endpoint)) {
                 throw new UnknownHostException(endpoint.getHostName());
             }
         }
@@ -343,9 +343,11 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
                 threadPoolListener.onQueueWaitTime(waitTimeMillis);
             }
             if (!sessionRequest.isCancelled()) {
+                final SocketAddress socksProxyAddress = reactorConfig.getSocksProxyAddress();
+                final SocketAddress connectAddress = socksProxyAddress != null ? socksProxyAddress : sessionRequest.remoteAddress;
                 final SocketChannel socketChannel;
                 try {
-                    socketChannel = openSocketFor(sessionRequest.remoteAddress);
+                    socketChannel = openSocketFor(connectAddress);
                 } catch (final IOException ex) {
                     sessionRequest.failed(ex);
                     return;
@@ -360,27 +362,31 @@ class SingleCoreIOReactor extends AbstractSingleCoreIOReactor implements Connect
         }
     }
 
-    private static SocketChannel openSocketFor(final SocketAddress remoteAddress) throws IOException {
+    private SocketChannel openSocketFor(final SocketAddress remoteAddress) throws IOException {
         if (VsockSupport.isVsockAddress(remoteAddress)) {
             try {
-                return VsockSupport.openVsockChannel();
+                return VsockSupport.openVsockChannel(this.selector.provider());
             } catch (final ReflectiveOperationException ex) {
                 throw new UnsupportedOperationException("AF_VSOCK socket channels not supported", ex);
             }
         }
         if (remoteAddress instanceof InetSocketAddress) {
-            return SocketChannel.open();
+            return this.selector.provider().openSocketChannel();
         }
+        final Object provider = this.selector.provider();
         try {
-            return (SocketChannel) SocketChannel.class.getMethod("open", ProtocolFamily.class)
-                .invoke(null, StandardProtocolFamily.valueOf("UNIX"));
+            return (SocketChannel) provider.getClass().getMethod("openSocketChannel", ProtocolFamily.class)
+                .invoke(provider, StandardProtocolFamily.valueOf("UNIX"));
+        } catch (final NoSuchMethodException ex) {
+            try {
+                return (SocketChannel) SocketChannel.class.getMethod("open", ProtocolFamily.class)
+                    .invoke(null, StandardProtocolFamily.valueOf("UNIX"));
+            } catch (final ReflectiveOperationException e2) {
+                throw new UnsupportedOperationException("UNIX-family socket channels not supported", e2);
+            }
         } catch (final ReflectiveOperationException e) {
             throw new UnsupportedOperationException("UNIX-family socket channels not supported", e);
         }
-    }
-
-    private static boolean isVsockAddress(final SocketAddress remoteAddress) {
-        return VsockSupport.isVsockAddress(remoteAddress);
     }
 
     private void processConnectionRequest(final SocketChannel socketChannel, final IOSessionRequest sessionRequest) throws IOException {
