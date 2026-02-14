@@ -35,9 +35,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Deque;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -90,7 +88,6 @@ import org.apache.hc.core5.http2.nio.AsyncPingHandler;
 import org.apache.hc.core5.http2.nio.command.PingCommand;
 import org.apache.hc.core5.http2.nio.command.PushResponseCommand;
 import org.apache.hc.core5.http2.priority.PriorityParamsParser;
-import org.apache.hc.core5.http2.priority.PriorityValue;
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.reactor.Command;
 import org.apache.hc.core5.reactor.ProtocolIOSession;
@@ -141,7 +138,6 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
     private EndpointDetails endpointDetails;
     private boolean goAwayReceived;
 
-    private final Map<Integer, PriorityValue> priorities = new ConcurrentHashMap<>();
     private volatile boolean peerNoRfc7540Priorities;
 
 
@@ -1029,9 +1025,7 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
                 } else {
                     field = "";
                 }
-                final PriorityValue pv = PriorityParamsParser.parse(field).toValueWithDefaults();
-                priorities.put(prioritizedId, pv);
-                requestSessionOutput();
+                PriorityParamsParser.parse(field).toValueWithDefaults();
             }
             break;
         }
@@ -1106,7 +1100,6 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
             if (streamListener != null) {
                 streamListener.onHeaderInput(this, streamId, headers);
             }
-            recordPriorityFromHeaders(streamId, headers);
             stream.consumeHeader(headers, frame.isFlagSet(FrameFlag.END_STREAM));
         } else {
             continuation.copyPayload(payload);
@@ -1125,7 +1118,6 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
             if (streamListener != null) {
                 streamListener.onHeaderInput(this, streamId, headers);
             }
-            recordPriorityFromHeaders(streamId, headers);
             if (continuation.type == FrameType.PUSH_PROMISE.getValue()) {
                 stream.consumePromise(headers);
             } else {
@@ -1376,19 +1368,6 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
     H2Stream createStream(final H2StreamChannel channel, final H2StreamHandler streamHandler) {
         final H2Stream stream = streams.createActive(channel, streamHandler);
         return stream;
-    }
-
-    private void recordPriorityFromHeaders(final int streamId, final List<? extends Header> headers) {
-        if (headers == null || headers.isEmpty()) {
-            return;
-        }
-        for (final Header h : headers) {
-            if (HttpHeaders.PRIORITY.equalsIgnoreCase(h.getName())) {
-                final PriorityValue pv = PriorityParamsParser.parse(h.getValue()).toValueWithDefaults();
-                priorities.put(streamId, pv);
-                break;
-            }
-        }
     }
 
     class H2StreamChannelImpl implements H2StreamChannel {
