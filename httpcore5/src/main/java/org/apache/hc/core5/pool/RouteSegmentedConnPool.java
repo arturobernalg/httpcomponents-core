@@ -97,6 +97,13 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
 
     private final ConcurrentHashMap<R, Segment> segments = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<R, Integer> maxPerRoute = new ConcurrentHashMap<>();
+
+    /**
+     * Tracks entries currently leased out by this pool.
+     * Used to detect foreign entries and double releases.
+     */
+    private final Set<PoolEntry<R, C>> leasedEntries = ConcurrentHashMap.newKeySet();
+
     private final AtomicInteger totalAllocated = new AtomicInteger(0);
     private final AtomicInteger maxTotal = new AtomicInteger(25);
 
@@ -239,9 +246,14 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
             break;
         }
         if (hit != null) {
+            leasedEntries.add(hit);
             fireOnLease(route);
             if (callback != null) {
-                callback.completed(hit);
+                try {
+                    callback.completed(hit);
+                } catch (final RuntimeException ignore) {
+                    // ignore
+                }
             }
             return CompletableFuture.completedFuture(hit);
         }
@@ -249,15 +261,21 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
         // 2) Try to allocate new within caps
         if (tryAllocateOne(route, seg)) {
             final PoolEntry<R, C> entry = new PoolEntry<>(route, timeToLive, disposal);
+            leasedEntries.add(entry);
             fireOnLease(route);
             if (callback != null) {
-                callback.completed(entry);
+                try {
+                    callback.completed(entry);
+                } catch (final RuntimeException ignore) {
+                    // ignore
+                }
             }
             return CompletableFuture.completedFuture(entry);
         }
 
         // 3) Enqueue waiter with timeout
         final Waiter w = new Waiter(route, seg, requestTimeout, state);
+        registerCallback(w, callback);
         seg.waiters.addLast(w);
         enqueueIfNeeded(route, seg);
 
@@ -265,49 +283,21 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
         final PoolEntry<R, C> late = pollAvailable(seg, state);
         if (late != null) {
             if (seg.waiters.remove(w)) {
-                cancelTimeout(w);
-                fireOnLease(route);
-                if (callback != null) {
-                    callback.completed(late);
+                if (!completeWaiter(w, late)) {
+                    if (!handOffToCompatibleWaiter(late, seg)) {
+                        offerAvailable(seg, late);
+                    }
                 }
-                w.complete(late);
                 dequeueIfDrained(seg);
                 return w;
             } else {
-                boolean handedOff = false;
-                for (Waiter other; (other = seg.waiters.pollFirst()) != null; ) {
-                    if (!other.cancelled && compatible(other.state, late.getState())) {
-                        cancelTimeout(other);
-                        handedOff = other.complete(late);
-                        if (handedOff) {
-                            fireOnLease(other.route);
-                            break;
-                        }
-                    }
-                }
-                if (!handedOff) {
+                if (!handOffToCompatibleWaiter(late, seg)) {
                     offerAvailable(seg, late);
                 }
             }
         }
 
         scheduleTimeout(w, seg);
-
-        if (callback != null) {
-            w.whenComplete((pe, ex) -> {
-                if (ex != null) {
-                    final Exception failure;
-                    if (ex instanceof Exception) {
-                        failure = (Exception) ex;
-                    } else {
-                        failure = new Exception(ex);
-                    }
-                    callback.failed(failure);
-                } else {
-                    callback.completed(pe);
-                }
-            });
-        }
 
         triggerDrainIfMany();
         return w;
@@ -319,11 +309,25 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
             return;
         }
         final R route = entry.getRoute();
+
+        final boolean removed = leasedEntries.remove(entry);
+        if (!removed) {
+            if (closed.get()) {
+                discardEntry(entry, CloseMode.GRACEFUL);
+                fireOnRelease(route);
+                return;
+            }
+            throw new IllegalStateException("Pool entry is not present in the set of leased entries");
+        }
+
         final Segment seg = segments.get(route);
         if (seg == null) {
-            discardEntry(entry, CloseMode.GRACEFUL);
-            fireOnRelease(route);
-            return;
+            if (closed.get()) {
+                discardEntry(entry, CloseMode.GRACEFUL);
+                fireOnRelease(route);
+                return;
+            }
+            throw new IllegalStateException("Route segment is not present for a leased entry");
         }
 
         final long now = System.currentTimeMillis();
@@ -382,6 +386,7 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
             }
         }
         segments.clear();
+        leasedEntries.clear();
         pendingQueue.clear();
         pendingRouteCount.set(0);
 
@@ -583,6 +588,14 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
     }
 
     private boolean handOffToCompatibleWaiter(final PoolEntry<R, C> entry, final Segment seg) {
+        return handOffToWaiter(entry, seg, true);
+    }
+
+    private boolean handOffToAnyWaiter(final PoolEntry<R, C> entry, final Segment seg) {
+        return handOffToWaiter(entry, seg, false);
+    }
+
+    private boolean handOffToWaiter(final PoolEntry<R, C> entry, final Segment seg, final boolean requireCompatibleState) {
         final Deque<Waiter> skipped = new ArrayDeque<>();
         boolean handedOff = false;
 
@@ -594,12 +607,9 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
             if (w.cancelled || w.isDone()) {
                 continue;
             }
-            if (compatible(w.state, entry.getState())) {
-                cancelTimeout(w);
-                handedOff = w.complete(entry);
+            if (!requireCompatibleState || compatible(w.state, entry.getState())) {
+                handedOff = completeWaiter(w, entry);
                 if (handedOff) {
-                    fireOnLease(w.route);
-                    dequeueIfDrained(seg);
                     break;
                 }
             } else {
@@ -610,7 +620,40 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
         while (!skipped.isEmpty()) {
             seg.waiters.addFirst(skipped.pollLast());
         }
+
+        dequeueIfDrained(seg);
         return handedOff;
+    }
+
+    private void registerCallback(final Waiter w, final FutureCallback<PoolEntry<R, C>> callback) {
+        if (callback == null) {
+            return;
+        }
+        w.whenComplete((pe, ex) -> {
+            if (ex != null) {
+                final Exception failure;
+                if (ex instanceof Exception) {
+                    failure = (Exception) ex;
+                } else {
+                    failure = new Exception(ex);
+                }
+                callback.failed(failure);
+            } else {
+                callback.completed(pe);
+            }
+        });
+    }
+
+    private boolean completeWaiter(final Waiter w, final PoolEntry<R, C> entry) {
+        cancelTimeout(w);
+        leasedEntries.add(entry);
+        final boolean completed = w.complete(entry);
+        if (completed) {
+            fireOnLease(w.route);
+        } else {
+            leasedEntries.remove(entry);
+        }
+        return completed;
     }
 
     private void discardAndDecr(final PoolEntry<R, C> p, final CloseMode mode) {
@@ -732,10 +775,14 @@ public final class RouteSegmentedConnPool<R, C extends ModalCloseable> implement
                 totalAllocated.decrementAndGet();
             } else {
                 final PoolEntry<R, C> entry = new PoolEntry<>(route, timeToLive, disposal);
-                cancelTimeout(w);
-                w.complete(entry);
-                fireOnLease(w.route);
-                created++;
+                if (completeWaiter(w, entry)) {
+                    created++;
+                } else if (handOffToAnyWaiter(entry, seg)) {
+                    created++;
+                } else {
+                    // Nobody could take it right now; keep it available (no counter rollback).
+                    offerAvailable(seg, entry);
+                }
             }
 
             if (!seg.waiters.isEmpty()) {

@@ -30,22 +30,36 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Delayed;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.hc.core5.concurrent.FutureCallback;
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.io.ModalCloseable;
 import org.apache.hc.core5.util.TimeValue;
@@ -58,6 +72,16 @@ public class RouteSegmentedConnPoolTest {
             final int defPerRoute, final int maxTotal, final TimeValue ttl, final PoolReusePolicy reuse,
             final DisposalCallback<C> disposal) {
         return new RouteSegmentedConnPool<>(defPerRoute, maxTotal, ttl, reuse, disposal);
+    }
+
+    private static RouteSegmentedConnPool<String, FakeConnection> newPool(
+            final int defPerRoute, final int maxTotal) {
+        return new RouteSegmentedConnPool<>(
+                defPerRoute,
+                maxTotal,
+                TimeValue.NEG_ONE_MILLISECOND,
+                PoolReusePolicy.LIFO,
+                FakeConnection::close);
     }
 
     @Test
@@ -357,5 +381,304 @@ public class RouteSegmentedConnPoolTest {
         // Final cleanup
         pool.close(CloseMode.IMMEDIATE);
         assertTrue(pool.getRoutes().isEmpty(), "All routes must be gone after close()");
+    }
+
+    @Test
+    void repro_roundRobinCompletionLossLeaksGhostLease() throws Exception {
+        final RouteSegmentedConnPool<String, FakeConnection> pool = newPool(5, 1);
+        final ExecutorService drainer = Executors.newSingleThreadExecutor();
+        try {
+            final PoolEntry<String, FakeConnection> blocker =
+                    pool.lease("blocker", null, Timeout.ofSeconds(1), null).get(1, TimeUnit.SECONDS);
+
+            final Future<PoolEntry<String, FakeConnection>> waiterFuture =
+                    pool.lease("target", null, Timeout.ofSeconds(5), null);
+
+            final Object targetSegment = getSegment(pool, "target");
+            assertNotNull(targetSegment);
+            final Object waiter = getFirstWaiter(targetSegment);
+            assertNotNull(waiter);
+
+            final BlockingScheduledFuture blockingTimeoutTask = new BlockingScheduledFuture();
+            setWaiterTimeoutTask(waiter, blockingTimeoutTask);
+
+            // Free global headroom. We'll invoke RR manually so we can orchestrate timing.
+            pool.release(blocker, false);
+
+            final Future<?> drainFuture = drainer.submit(() -> invokeServeRoundRobin(pool, 1));
+            assertTrue(blockingTimeoutTask.awaitCancelEntered(1, TimeUnit.SECONDS));
+
+            ((CompletableFuture<?>) waiter).completeExceptionally(new TimeoutException("Injected completion"));
+            blockingTimeoutTask.allowCancelToReturn();
+            drainFuture.get(1, TimeUnit.SECONDS);
+
+            final ExecutionException ex = assertThrows(
+                    ExecutionException.class,
+                    () -> waiterFuture.get(1, TimeUnit.SECONDS));
+            assertInstanceOf(TimeoutException.class, ex.getCause());
+
+            // Expected safe behavior: no ghost leased entries after failed completion hand-off.
+            final PoolStats stats = pool.getStats("target");
+            assertEquals(0, stats.getLeased(), "ghost lease leaked after failed RR completion");
+            assertEquals(0, stats.getPending());
+        } finally {
+            drainer.shutdownNow();
+            pool.close(CloseMode.IMMEDIATE);
+        }
+    }
+
+    @Test
+    void repro_lateHitCompletionLossLeaksAvailableEntry() throws Exception {
+        final RouteSegmentedConnPool<String, FakeConnection> pool = newPool(1, 1);
+        final ExecutorService leaseThread = Executors.newSingleThreadExecutor();
+        try {
+            final PoolEntry<String, FakeConnection> seed =
+                    pool.lease("r", null, Timeout.ofSeconds(1), null).get(1, TimeUnit.SECONDS);
+            seed.assignConnection(new FakeConnection());
+            seed.updateState("seed");
+            seed.updateExpiry(TimeValue.ofSeconds(30));
+            pool.release(seed, true);
+
+            final TwoPhaseState requestedState = new TwoPhaseState();
+            final Future<Future<PoolEntry<String, FakeConnection>>> outer =
+                    leaseThread.submit(() -> pool.lease("r", requestedState, Timeout.ofSeconds(5), null));
+
+            requestedState.awaitLatePollEntered(1, TimeUnit.SECONDS);
+
+            final Object segment = getSegment(pool, "r");
+            assertNotNull(segment);
+            final Object waiter = getFirstWaiter(segment);
+            assertNotNull(waiter);
+
+            // Complete the waiter before lease() reaches w.complete(late), while keeping it in waiters.
+            ((CompletableFuture<?>) waiter).completeExceptionally(new TimeoutException("Injected completion"));
+            requestedState.allowLatePollToProceed();
+
+            final Future<PoolEntry<String, FakeConnection>> leaseFuture = outer.get(1, TimeUnit.SECONDS);
+            final ExecutionException ex = assertThrows(
+                    ExecutionException.class,
+                    () -> leaseFuture.get(1, TimeUnit.SECONDS));
+            assertInstanceOf(TimeoutException.class, ex.getCause());
+
+            // Expected safe behavior: late-hit entry should remain available; no ghost lease.
+            final PoolStats stats = pool.getStats("r");
+            assertEquals(0, stats.getLeased(), "ghost lease leaked after failed late-hit completion");
+            assertEquals(1, stats.getAvailable(), "late-hit entry disappeared from available pool");
+            assertEquals(0, stats.getPending());
+        } finally {
+            leaseThread.shutdownNow();
+            pool.close(CloseMode.IMMEDIATE);
+        }
+    }
+
+    @Test
+    void repro_releasingForeignEntryCreatesPhantomCapacity() throws Exception {
+        final RouteSegmentedConnPool<String, FakeConnection> pool = newPool(1, 1);
+        try {
+            final PoolEntry<String, FakeConnection> held =
+                    pool.lease("r", null, Timeout.ofSeconds(1), null).get(1, TimeUnit.SECONDS);
+
+            final PoolEntry<String, FakeConnection> foreign =
+                    new PoolEntry<>("r", TimeValue.NEG_ONE_MILLISECOND, FakeConnection::close);
+            foreign.assignConnection(new FakeConnection());
+            foreign.updateExpiry(TimeValue.ofSeconds(30));
+
+            final IllegalStateException releaseEx = assertThrows(
+                    IllegalStateException.class,
+                    () -> pool.release(foreign, false));
+            assertEquals("Pool entry is not present in the set of leased entries", releaseEx.getMessage());
+
+            final Future<PoolEntry<String, FakeConnection>> unexpected =
+                    pool.lease("r", null, Timeout.ofMilliseconds(150), null);
+
+            // Expected safe behavior: while 'held' is leased and max=1, this should time out.
+            final ExecutionException ex = assertThrows(
+                    ExecutionException.class,
+                    () -> unexpected.get(500, TimeUnit.MILLISECONDS));
+            assertInstanceOf(TimeoutException.class, ex.getCause());
+
+            pool.release(held, false);
+        } finally {
+            pool.close(CloseMode.IMMEDIATE);
+        }
+    }
+
+    @Test
+    void repro_waiterCallbackReleaseMustNotSeeUnknownEntry() throws Exception {
+        final RouteSegmentedConnPool<String, FakeConnection> pool = newPool(1, 1);
+        try {
+            final PoolEntry<String, FakeConnection> held =
+                    pool.lease("r", null, Timeout.ofSeconds(1), null).get(1, TimeUnit.SECONDS);
+            held.assignConnection(new FakeConnection());
+            held.updateExpiry(TimeValue.ofSeconds(30));
+
+            final CountDownLatch callbackDone = new CountDownLatch(1);
+            final AtomicReference<Throwable> callbackError = new AtomicReference<>();
+
+            final Future<PoolEntry<String, FakeConnection>> waiter =
+                    pool.lease("r", null, Timeout.ofSeconds(1), new FutureCallback<PoolEntry<String, FakeConnection>>() {
+                        @Override
+                        public void completed(final PoolEntry<String, FakeConnection> result) {
+                            try {
+                                // Callback immediately releases the handed-off entry.
+                                pool.release(result, false);
+                            } catch (final Throwable ex) {
+                                callbackError.compareAndSet(null, ex);
+                            } finally {
+                                callbackDone.countDown();
+                            }
+                        }
+
+                        @Override
+                        public void failed(final Exception ex) {
+                            callbackError.compareAndSet(null, ex);
+                            callbackDone.countDown();
+                        }
+
+                        @Override
+                        public void cancelled() {
+                            callbackDone.countDown();
+                        }
+                    });
+
+            pool.release(held, true);
+
+            assertNotNull(waiter.get(1, TimeUnit.SECONDS));
+            assertTrue(callbackDone.await(1, TimeUnit.SECONDS), "callback did not complete in time");
+            assertNull(callbackError.get(), "callback saw an unexpected error while releasing handoff entry");
+        } finally {
+            pool.close(CloseMode.IMMEDIATE);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object getSegment(
+            final RouteSegmentedConnPool<String, FakeConnection> pool,
+            final String route) throws Exception {
+        final Field segmentsField = RouteSegmentedConnPool.class.getDeclaredField("segments");
+        segmentsField.setAccessible(true);
+        final Map<String, Object> segments = (Map<String, Object>) segmentsField.get(pool);
+        return segments.get(route);
+    }
+
+    private static Object getFirstWaiter(final Object segment) throws Exception {
+        final Field waitersField = segment.getClass().getDeclaredField("waiters");
+        waitersField.setAccessible(true);
+        final Deque<?> waiters = (Deque<?>) waitersField.get(segment);
+        return waiters.peekFirst();
+    }
+
+    private static void setWaiterTimeoutTask(final Object waiter, final ScheduledFuture<?> timeoutTask) throws Exception {
+        final Field timeoutTaskField = waiter.getClass().getDeclaredField("timeoutTask");
+        timeoutTaskField.setAccessible(true);
+        timeoutTaskField.set(waiter, timeoutTask);
+    }
+
+    private static void invokeServeRoundRobin(
+            final RouteSegmentedConnPool<String, FakeConnection> pool,
+            final int budget) {
+        try {
+            final Method method = RouteSegmentedConnPool.class.getDeclaredMethod("serveRoundRobin", int.class);
+            method.setAccessible(true);
+            method.invoke(pool, budget);
+        } catch (final Exception ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
+    private static final class BlockingScheduledFuture implements ScheduledFuture<Object> {
+        private final CountDownLatch cancelEntered = new CountDownLatch(1);
+        private final CountDownLatch allowCancelReturn = new CountDownLatch(1);
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+
+        boolean awaitCancelEntered(final long timeout, final TimeUnit unit) throws InterruptedException {
+            return cancelEntered.await(timeout, unit);
+        }
+
+        void allowCancelToReturn() {
+            allowCancelReturn.countDown();
+        }
+
+        @Override
+        public boolean cancel(final boolean mayInterruptIfRunning) {
+            cancelled.set(true);
+            cancelEntered.countDown();
+            try {
+                allowCancelReturn.await(5, TimeUnit.SECONDS);
+            } catch (final InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+            return true;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        @Override
+        public boolean isDone() {
+            return cancelled.get();
+        }
+
+        @Override
+        public Object get() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Object get(final long timeout, final TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long getDelay(final TimeUnit unit) {
+            return 0;
+        }
+
+        @Override
+        public int compareTo(final Delayed other) {
+            return 0;
+        }
+    }
+
+    private static final class TwoPhaseState {
+        private final AtomicInteger equalsCalls = new AtomicInteger(0);
+        private final CountDownLatch latePollEntered = new CountDownLatch(1);
+        private final CountDownLatch allowLatePoll = new CountDownLatch(1);
+
+        void awaitLatePollEntered(final long timeout, final TimeUnit unit) throws InterruptedException {
+            assertTrue(latePollEntered.await(timeout, unit), "late poll was not reached");
+        }
+
+        void allowLatePollToProceed() {
+            allowLatePoll.countDown();
+        }
+
+        @Override
+        public boolean equals(final Object other) {
+            final int call = equalsCalls.incrementAndGet();
+            if (call == 1) {
+                return false;
+            }
+            if (call == 2) {
+                latePollEntered.countDown();
+                try {
+                    if (!allowLatePoll.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("Timed out waiting to continue late poll");
+                    }
+                } catch (final InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(ex);
+                }
+                return true;
+            }
+            return true;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31;
+        }
     }
 }
