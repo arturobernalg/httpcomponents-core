@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Lock;
 
 import org.apache.hc.core5.annotation.Internal;
 import org.apache.hc.core5.concurrent.BasicFuture;
@@ -289,21 +290,6 @@ public class HttpAsyncRequester extends AsyncRequester implements ConnPoolContro
 
                     @Override
                     public void completed(final AsyncClientEndpoint endpoint) {
-                        final int max = maxPendingCommandsPerConnection;
-                        if (max > 0) {
-                            final IOSession ioSession = ((InternalAsyncClientEndpoint) endpoint).getIOSession();
-                            final int pending = ioSession.getPendingCommandCount();
-                            if (pending >= 0 && pending >= max) {
-                                try {
-                                    endpoint.releaseAndReuse();
-                                    exchangeHandler.failed(new RejectedExecutionException(
-                                            "Maximum number of pending requests per connection reached (max=" + max + ")"));
-                                } finally {
-                                    exchangeHandler.releaseResources();
-                                }
-                                return;
-                            }
-                        }
                         endpoint.execute(new AsyncClientExchangeHandler() {
 
                             @Override
@@ -521,15 +507,37 @@ public class HttpAsyncRequester extends AsyncRequester implements ConnPoolContro
                 final HandlerFactory<AsyncPushConsumer> pushHandlerFactory,
                 final HttpContext context) {
             final IOSession ioSession = getIOSession();
-            ioSession.enqueue(
-                    new RequestExecutionCommand(exchangeHandler, pushHandlerFactory, context),
-                    Command.Priority.NORMAL);
-            if (!ioSession.isOpen()) {
+            final RequestExecutionCommand command = new RequestExecutionCommand(exchangeHandler, pushHandlerFactory, context);
+            final int max = maxPendingCommandsPerConnection;
+            boolean rejected = false;
+            if (max > 0) {
+                final Lock lock = ioSession.getLock();
+                lock.lock();
                 try {
-                    exchangeHandler.failed(new ConnectionClosedException());
+                    final int pending = ioSession.getPendingCommandCount();
+                    if (pending >= 0 && pending >= max) {
+                        rejected = true;
+                    } else {
+                        ioSession.enqueue(command, Command.Priority.NORMAL);
+                    }
+                } finally {
+                    lock.unlock();
+                }
+            } else {
+                ioSession.enqueue(command, Command.Priority.NORMAL);
+            }
+            if (rejected) {
+                try {
+                    releaseAndReuse();
+                    exchangeHandler.failed(new RejectedExecutionException(
+                            "Maximum number of pending requests per connection reached (max=" + max + ")"));
                 } finally {
                     exchangeHandler.releaseResources();
                 }
+                return;
+            }
+            if (!ioSession.isOpen()) {
+                command.failed(new ConnectionClosedException());
             }
         }
 
