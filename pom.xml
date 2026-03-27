@@ -64,6 +64,7 @@
     <module>httpcore5-h2</module>
     <module>httpcore5-reactive</module>
     <module>httpcore5-jackson2</module>
+    <module>httpcore5-jaxrs</module>
     <module>httpcore5-testing</module>
   </modules>
 
