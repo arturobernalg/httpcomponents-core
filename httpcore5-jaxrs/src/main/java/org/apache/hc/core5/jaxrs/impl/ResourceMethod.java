@@ -33,14 +33,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.apache.hc.core5.jaxrs.annotation.Consumes;
-import org.apache.hc.core5.jaxrs.annotation.DefaultValue;
-import org.apache.hc.core5.jaxrs.annotation.HeaderParam;
-import org.apache.hc.core5.jaxrs.annotation.HttpMethod;
-import org.apache.hc.core5.jaxrs.annotation.Path;
-import org.apache.hc.core5.jaxrs.annotation.PathParam;
-import org.apache.hc.core5.jaxrs.annotation.Produces;
-import org.apache.hc.core5.jaxrs.annotation.QueryParam;
+import javax.ws.rs.Consumes;
+import javax.ws.rs.DefaultValue;
+import javax.ws.rs.HeaderParam;
+import javax.ws.rs.HttpMethod;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.QueryParam;
 
 /**
  * Immutable descriptor for a single JAX-RS resource endpoint. Each
@@ -181,11 +181,13 @@ public final class ResourceMethod {
             final List<ResourceMethod> methods) {
         final Set<String> seen = new HashSet<>();
         for (final ResourceMethod rm : methods) {
-            final String key = rm.httpMethod + " "
-                    + rm.uriTemplate.getTemplate();
+            final String normalized = rm.uriTemplate.getTemplate()
+                    .replaceAll("\\{[^}]+\\}", "{_}");
+            final String key = rm.httpMethod + " " + normalized;
             if (!seen.add(key)) {
                 throw new IllegalStateException(
-                        "Duplicate route: " + key);
+                        "Duplicate route: " + rm.httpMethod + " "
+                                + rm.uriTemplate.getTemplate());
             }
         }
     }

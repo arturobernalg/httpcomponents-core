@@ -34,6 +34,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -43,18 +44,18 @@ import org.apache.hc.core5.http.HttpHeaders;
 import org.apache.hc.core5.http.URIScheme;
 import org.apache.hc.core5.http.impl.bootstrap.HttpAsyncServer;
 import org.apache.hc.core5.io.CloseMode;
-import org.apache.hc.core5.jaxrs.annotation.Consumes;
-import org.apache.hc.core5.jaxrs.annotation.DELETE;
-import org.apache.hc.core5.jaxrs.annotation.DefaultValue;
-import org.apache.hc.core5.jaxrs.annotation.GET;
-import org.apache.hc.core5.jaxrs.annotation.HeaderParam;
-import org.apache.hc.core5.jaxrs.annotation.POST;
-import org.apache.hc.core5.jaxrs.annotation.Path;
-import org.apache.hc.core5.jaxrs.annotation.PathParam;
-import org.apache.hc.core5.jaxrs.annotation.Produces;
-import org.apache.hc.core5.jaxrs.annotation.QueryParam;
-import org.apache.hc.core5.jaxrs.core.MediaType;
-import org.apache.hc.core5.jaxrs.core.Response;
+import javax.ws.rs.Consumes;
+import javax.ws.rs.DELETE;
+import javax.ws.rs.DefaultValue;
+import javax.ws.rs.GET;
+import javax.ws.rs.HeaderParam;
+import javax.ws.rs.POST;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.QueryParam;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
 import org.apache.hc.core5.reactor.IOReactorConfig;
 import org.apache.hc.core5.reactor.ListenerEndpoint;
 import org.junit.jupiter.api.AfterAll;
@@ -92,7 +93,8 @@ class JaxrsServerBootstrapTest {
         @POST
         @Consumes(MediaType.APPLICATION_JSON)
         public Response create(final Widget widget) {
-            return Response.created("/widgets/" + widget.id)
+            return Response.created(
+                    URI.create("/widgets/" + widget.id))
                     .entity(widget)
                     .build();
         }

@@ -24,27 +24,8 @@
  * <http://www.apache.org/>.
  *
  */
-package org.apache.hc.core5.jaxrs.annotation;
-
-import java.lang.annotation.Documented;
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
 
 /**
- * Binds the value of an HTTP query parameter to a resource method parameter.
- *
- * @since 5.5
+ * Internal implementation classes for JAX-RS resource dispatching.
  */
-@Target({ElementType.PARAMETER, ElementType.FIELD, ElementType.METHOD})
-@Retention(RetentionPolicy.RUNTIME)
-@Documented
-public @interface QueryParam {
-
-    /**
-     * The name of the query parameter.
-     */
-    String value();
-
-}
+package org.apache.hc.core5.jaxrs.impl;

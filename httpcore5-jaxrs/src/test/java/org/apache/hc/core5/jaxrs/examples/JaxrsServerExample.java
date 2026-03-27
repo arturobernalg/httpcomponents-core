@@ -27,29 +27,31 @@
 package org.apache.hc.core5.jaxrs.examples;
 
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import javax.ws.rs.Consumes;
+import javax.ws.rs.DELETE;
+import javax.ws.rs.GET;
+import javax.ws.rs.POST;
+import javax.ws.rs.PUT;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.QueryParam;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+import javax.ws.rs.ext.ExceptionMapper;
+
 import org.apache.hc.core5.http.URIScheme;
 import org.apache.hc.core5.http.impl.bootstrap.HttpAsyncServer;
 import org.apache.hc.core5.http.protocol.HttpDateGenerator;
 import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.jaxrs.JaxrsServerBootstrap;
-import org.apache.hc.core5.jaxrs.annotation.Consumes;
-import org.apache.hc.core5.jaxrs.annotation.DELETE;
-import org.apache.hc.core5.jaxrs.annotation.GET;
-import org.apache.hc.core5.jaxrs.annotation.POST;
-import org.apache.hc.core5.jaxrs.annotation.PUT;
-import org.apache.hc.core5.jaxrs.annotation.Path;
-import org.apache.hc.core5.jaxrs.annotation.PathParam;
-import org.apache.hc.core5.jaxrs.annotation.Produces;
-import org.apache.hc.core5.jaxrs.annotation.QueryParam;
-import org.apache.hc.core5.jaxrs.core.MediaType;
-import org.apache.hc.core5.jaxrs.core.Response;
-import org.apache.hc.core5.jaxrs.ext.ExceptionMapper;
 import org.apache.hc.core5.reactor.IOReactorConfig;
 import org.apache.hc.core5.reactor.ListenerEndpoint;
 import org.apache.hc.core5.util.TimeValue;
@@ -135,7 +137,7 @@ public class JaxrsServerExample {
                 @PathParam("id") final int id) {
             final Product p = store.get(id);
             if (p == null) {
-                return Response.notFound()
+                return Response.status(404)
                         .entity("Product not found: " + id)
                         .type(MediaType.TEXT_PLAIN)
                         .build();
@@ -149,7 +151,8 @@ public class JaxrsServerExample {
             final int id = sequence.incrementAndGet();
             product.id = id;
             store.put(id, product);
-            return Response.created("/products/" + id)
+            return Response.created(
+                    URI.create("/products/" + id))
                     .entity(product)
                     .build();
         }
@@ -161,7 +164,7 @@ public class JaxrsServerExample {
                 @PathParam("id") final int id,
                 final Product product) {
             if (!store.containsKey(id)) {
-                return Response.notFound()
+                return Response.status(404)
                         .entity("Product not found: " + id)
                         .type(MediaType.TEXT_PLAIN)
                         .build();
@@ -176,7 +179,7 @@ public class JaxrsServerExample {
         public Response delete(
                 @PathParam("id") final int id) {
             if (store.remove(id) == null) {
-                return Response.notFound()
+                return Response.status(404)
                         .entity("Product not found: " + id)
                         .type(MediaType.TEXT_PLAIN)
                         .build();

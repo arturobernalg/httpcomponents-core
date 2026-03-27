@@ -24,29 +24,8 @@
  * <http://www.apache.org/>.
  *
  */
-package org.apache.hc.core5.jaxrs.annotation;
-
-import java.lang.annotation.Documented;
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
 
 /**
- * Identifies the URI path that a resource class or method will serve
- * requests for. The value is a relative URI path template that may
- * contain embedded template variables of the form {@code {name}}.
- *
- * @since 5.5
+ * JAX-RS style resource routing on top of Apache HttpComponents Core.
  */
-@Target({ElementType.TYPE, ElementType.METHOD})
-@Retention(RetentionPolicy.RUNTIME)
-@Documented
-public @interface Path {
-
-    /**
-     * The relative URI path template.
-     */
-    String value();
-
-}
+package org.apache.hc.core5.jaxrs;

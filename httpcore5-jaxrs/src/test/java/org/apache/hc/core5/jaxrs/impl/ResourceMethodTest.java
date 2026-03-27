@@ -31,15 +31,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 
-import org.apache.hc.core5.jaxrs.annotation.Consumes;
-import org.apache.hc.core5.jaxrs.annotation.DefaultValue;
-import org.apache.hc.core5.jaxrs.annotation.GET;
-import org.apache.hc.core5.jaxrs.annotation.POST;
-import org.apache.hc.core5.jaxrs.annotation.Path;
-import org.apache.hc.core5.jaxrs.annotation.PathParam;
-import org.apache.hc.core5.jaxrs.annotation.Produces;
-import org.apache.hc.core5.jaxrs.annotation.QueryParam;
-import org.apache.hc.core5.jaxrs.core.MediaType;
+import javax.ws.rs.Consumes;
+import javax.ws.rs.DefaultValue;
+import javax.ws.rs.GET;
+import javax.ws.rs.POST;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.QueryParam;
+import javax.ws.rs.core.MediaType;
 import org.junit.jupiter.api.Test;
 
 class ResourceMethodTest {

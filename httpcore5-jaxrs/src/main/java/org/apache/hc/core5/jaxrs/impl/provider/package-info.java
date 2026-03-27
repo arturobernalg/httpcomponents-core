@@ -24,30 +24,9 @@
  * <http://www.apache.org/>.
  *
  */
-package org.apache.hc.core5.jaxrs.annotation;
-
-import java.lang.annotation.Documented;
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Inherited;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
 
 /**
- * Defines the media type(s) that a resource method can accept.
- * Method-level annotations override class-level annotations.
- *
- * @since 5.5
+ * Built-in {@link javax.ws.rs.ext.MessageBodyReader} and
+ * {@link javax.ws.rs.ext.MessageBodyWriter} providers.
  */
-@Target({ElementType.TYPE, ElementType.METHOD})
-@Retention(RetentionPolicy.RUNTIME)
-@Inherited
-@Documented
-public @interface Consumes {
-
-    /**
-     * The consumable media types, for example {@code "application/json"}.
-     */
-    String[] value() default {"*/*"};
-
-}
+package org.apache.hc.core5.jaxrs.impl.provider;

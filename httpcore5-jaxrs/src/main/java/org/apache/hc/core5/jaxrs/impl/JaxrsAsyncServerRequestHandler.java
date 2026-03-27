@@ -26,20 +26,27 @@
  */
 package org.apache.hc.core5.jaxrs.impl;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
 import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.MultivaluedHashMap;
+import javax.ws.rs.core.Response;
+import javax.ws.rs.ext.ExceptionMapper;
+import javax.ws.rs.ext.MessageBodyReader;
+import javax.ws.rs.ext.MessageBodyWriter;
 
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.EntityDetails;
@@ -57,31 +64,46 @@ import org.apache.hc.core5.http.nio.entity.BasicAsyncEntityConsumer;
 import org.apache.hc.core5.http.nio.support.BasicRequestConsumer;
 import org.apache.hc.core5.http.nio.support.BasicResponseProducer;
 import org.apache.hc.core5.http.protocol.HttpContext;
-import org.apache.hc.core5.jaxrs.core.MediaType;
-import org.apache.hc.core5.jaxrs.core.Response;
-import org.apache.hc.core5.jaxrs.ext.ExceptionMapper;
 
 /**
  * Async server request handler that dispatches incoming HTTP requests
  * to JAX-RS annotated resource methods. The handler matches the request
  * URI against compiled URI templates and invokes the matching method
- * with extracted path, query and header parameters.
+ * with extracted path, query and header parameters. Request and response
+ * bodies are serialized through pluggable {@link MessageBodyReader} and
+ * {@link MessageBodyWriter} providers.
  *
  * @since 5.5
  */
 public final class JaxrsAsyncServerRequestHandler
         implements AsyncServerRequestHandler<Message<HttpRequest, byte[]>> {
 
+    private static final Annotation[] EMPTY_ANNOTATIONS =
+            new Annotation[0];
+
     private final List<ResourceMethod> resourceMethods;
-    private final ObjectMapper objectMapper;
+    private final List<MessageBodyReader<?>> bodyReaders;
+    private final List<MessageBodyWriter<?>> bodyWriters;
     private final List<ExceptionMapper<?>> exceptionMappers;
 
+    /**
+     * Creates a handler that dispatches to the given resource methods,
+     * using the supplied providers for body serialization and exception
+     * mappers for error handling.
+     *
+     * @param resourceMethods the scanned resource methods.
+     * @param bodyReaders     entity readers, checked in order.
+     * @param bodyWriters     entity writers, checked in order.
+     * @param exceptionMappers exception mappers, checked in order.
+     */
     public JaxrsAsyncServerRequestHandler(
             final List<ResourceMethod> resourceMethods,
-            final ObjectMapper objectMapper,
+            final List<MessageBodyReader<?>> bodyReaders,
+            final List<MessageBodyWriter<?>> bodyWriters,
             final List<ExceptionMapper<?>> exceptionMappers) {
         this.resourceMethods = resourceMethods;
-        this.objectMapper = objectMapper;
+        this.bodyReaders = bodyReaders;
+        this.bodyWriters = bodyWriters;
         this.exceptionMappers = exceptionMappers != null
                 ? exceptionMappers
                 : Collections.<ExceptionMapper<?>>emptyList();
@@ -110,8 +132,8 @@ public final class JaxrsAsyncServerRequestHandler
         final String path = queryStart >= 0
                 ? requestUri.substring(0, queryStart)
                 : requestUri;
-        final Map<String, String> queryParams = parseQueryString(
-                queryStart >= 0
+        final Map<String, List<String>> queryParams =
+                parseQueryString(queryStart >= 0
                         ? requestUri.substring(queryStart + 1)
                         : null);
 
@@ -179,7 +201,7 @@ public final class JaxrsAsyncServerRequestHandler
                 final String ct = ctHeader != null
                         ? ctHeader.getValue() : null;
                 if (ct == null
-                        || !MediaType.isCompatible(ct, cons)) {
+                        || !isMediaTypeCompatible(ct, cons)) {
                     sendError(responseTrigger, context,
                             HttpStatus.SC_UNSUPPORTED_MEDIA_TYPE,
                             "Unsupported Media Type");
@@ -219,10 +241,6 @@ public final class JaxrsAsyncServerRequestHandler
                     HttpStatus.SC_BAD_REQUEST,
                     e.getMessage() != null
                             ? e.getMessage() : "Bad Request");
-        } catch (final JsonProcessingException e) {
-            sendError(responseTrigger, context,
-                    HttpStatus.SC_BAD_REQUEST,
-                    "Malformed request body");
         } catch (final Exception e) {
             handleException(e, responseTrigger, context);
         }
@@ -231,7 +249,7 @@ public final class JaxrsAsyncServerRequestHandler
     private Object invoke(
             final ResourceMethod rm,
             final Map<String, String> pathParams,
-            final Map<String, String> queryParams,
+            final Map<String, List<String>> queryParams,
             final HttpRequest request,
             final byte[] body) throws Exception {
         final ResourceMethod.ParamInfo[] paramInfos =
@@ -249,8 +267,11 @@ public final class JaxrsAsyncServerRequestHandler
                             pi.type);
                     break;
                 case QUERY:
-                    final String queryVal =
+                    final List<String> queryVals =
                             queryParams.get(pi.name);
+                    final String queryVal =
+                            queryVals != null && !queryVals.isEmpty()
+                                    ? queryVals.get(0) : null;
                     args[i] = ParamConverter.convert(
                             queryVal != null
                                     ? queryVal : pi.defaultValue,
@@ -268,24 +289,18 @@ public final class JaxrsAsyncServerRequestHandler
                     break;
                 case BODY:
                     if (body != null && body.length > 0) {
-                        if (pi.type == String.class) {
-                            final Header ctHeader =
-                                    request.getFirstHeader(
-                                            HttpHeaders.CONTENT_TYPE);
-                            final ContentType ct = ctHeader != null
-                                    ? ContentType.parse(
-                                    ctHeader.getValue())
-                                    : ContentType.DEFAULT_TEXT;
-                            args[i] = new String(body,
-                                    ct.getCharset() != null
-                                            ? ct.getCharset()
-                                            : StandardCharsets
-                                            .UTF_8);
-                        } else if (pi.type == byte[].class) {
-                            args[i] = body;
-                        } else {
-                            args[i] = objectMapper.readValue(
-                                    body, pi.type);
+                        final Header ctHeader =
+                                request.getFirstHeader(
+                                        HttpHeaders.CONTENT_TYPE);
+                        final MediaType mediaType = ctHeader != null
+                                ? MediaType.valueOf(
+                                ctHeader.getValue()) : null;
+                        try {
+                            args[i] = readEntity(
+                                    body, pi.type, mediaType);
+                        } catch (final IOException e) {
+                            throw new IllegalArgumentException(
+                                    "Malformed request body", e);
                         }
                     }
                     break;
@@ -302,6 +317,45 @@ public final class JaxrsAsyncServerRequestHandler
             }
             throw e;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object readEntity(
+            final byte[] data, final Class<?> type,
+            final MediaType mediaType) throws IOException {
+        for (final MessageBodyReader<?> reader : bodyReaders) {
+            if (reader.isReadable(type, type,
+                    EMPTY_ANNOTATIONS, mediaType)) {
+                return ((MessageBodyReader) reader).readFrom(
+                        type, type, EMPTY_ANNOTATIONS, mediaType,
+                        new MultivaluedHashMap<String, String>(),
+                        new ByteArrayInputStream(data));
+            }
+        }
+        throw new IllegalArgumentException(
+                "No MessageBodyReader for " + type.getName());
+    }
+
+    @SuppressWarnings("unchecked")
+    private byte[] writeEntity(
+            final Object entity,
+            final MediaType mediaType) throws IOException {
+        final Class<?> type = entity.getClass();
+        for (final MessageBodyWriter<?> writer : bodyWriters) {
+            if (writer.isWriteable(type, type,
+                    EMPTY_ANNOTATIONS, mediaType)) {
+                final ByteArrayOutputStream baos =
+                        new ByteArrayOutputStream();
+                ((MessageBodyWriter) writer).writeTo(
+                        entity, type, type, EMPTY_ANNOTATIONS,
+                        mediaType,
+                        new MultivaluedHashMap<String, Object>(),
+                        baos);
+                return baos.toByteArray();
+            }
+        }
+        throw new IllegalArgumentException(
+                "No MessageBodyWriter for " + type.getName());
     }
 
     private void sendResult(
@@ -325,11 +379,14 @@ public final class JaxrsAsyncServerRequestHandler
         } else {
             final ContentType ct =
                     resolveContentType(rm, selectedType);
-            final byte[] encoded = encodeEntity(result, ct);
+            final MediaType mt =
+                    MediaType.valueOf(ct.getMimeType());
+            final byte[] encoded = writeEntity(result, mt);
             if (suppressBody) {
                 final BasicHttpResponse resp =
                         new BasicHttpResponse(HttpStatus.SC_OK);
-                resp.setHeader(HttpHeaders.CONTENT_TYPE, ct.toString());
+                resp.setHeader(HttpHeaders.CONTENT_TYPE,
+                        ct.toString());
                 responseTrigger.submitResponse(
                         new BasicResponseProducer(resp), context);
             } else {
@@ -354,7 +411,7 @@ public final class JaxrsAsyncServerRequestHandler
         final BasicHttpResponse httpResp =
                 new BasicHttpResponse(jaxrsResponse.getStatus());
         for (final Map.Entry<String, List<String>> entry
-                : jaxrsResponse.getHeaders().entrySet()) {
+                : jaxrsResponse.getStringHeaders().entrySet()) {
             for (final String value : entry.getValue()) {
                 httpResp.addHeader(entry.getKey(), value);
             }
@@ -373,8 +430,11 @@ public final class JaxrsAsyncServerRequestHandler
         } else {
             final ContentType ct = resolveEntityContentType(
                     httpResp, rm, selectedType);
-            final byte[] encoded = encodeEntity(entity, ct);
-            if (httpResp.getFirstHeader(HttpHeaders.CONTENT_TYPE) == null) {
+            final MediaType mt =
+                    MediaType.valueOf(ct.getMimeType());
+            final byte[] encoded = writeEntity(entity, mt);
+            if (httpResp.getFirstHeader(
+                    HttpHeaders.CONTENT_TYPE) == null) {
                 httpResp.setHeader(HttpHeaders.CONTENT_TYPE,
                         ct.toString());
             }
@@ -384,22 +444,6 @@ public final class JaxrsAsyncServerRequestHandler
                                     encoded, ct)),
                     context);
         }
-    }
-
-    private byte[] encodeEntity(final Object entity,
-                                final ContentType ct)
-            throws JsonProcessingException {
-        if (entity instanceof byte[]) {
-            return (byte[]) entity;
-        }
-        if (entity instanceof String
-                && !isJsonType(ct.getMimeType())) {
-            return ((String) entity).getBytes(
-                    ct.getCharset() != null
-                            ? ct.getCharset()
-                            : StandardCharsets.UTF_8);
-        }
-        return objectMapper.writeValueAsBytes(entity);
     }
 
     private static ContentType resolveContentType(
@@ -430,12 +474,6 @@ public final class JaxrsAsyncServerRequestHandler
         return resolveContentType(rm, selectedType);
     }
 
-    private static boolean isJsonType(final String mimeType) {
-        return "application/json".equalsIgnoreCase(mimeType)
-                || mimeType != null
-                && mimeType.endsWith("+json");
-    }
-
     @SuppressWarnings("unchecked")
     private void handleException(
             final Exception e,
@@ -462,20 +500,28 @@ public final class JaxrsAsyncServerRequestHandler
     private static boolean isApplicable(
             final ExceptionMapper<?> mapper,
             final Exception e) {
-        for (final java.lang.reflect.Type iface
-                : mapper.getClass().getGenericInterfaces()) {
-            if (iface instanceof java.lang.reflect.ParameterizedType) {
-                final java.lang.reflect.ParameterizedType pt =
-                        (java.lang.reflect.ParameterizedType) iface;
-                if (pt.getRawType() == ExceptionMapper.class) {
-                    final java.lang.reflect.Type arg =
-                            pt.getActualTypeArguments()[0];
-                    if (arg instanceof Class
-                            && ((Class<?>) arg).isInstance(e)) {
-                        return true;
+        Class<?> clazz = mapper.getClass();
+        while (clazz != null) {
+            for (final java.lang.reflect.Type iface
+                    : clazz.getGenericInterfaces()) {
+                if (iface instanceof
+                        java.lang.reflect.ParameterizedType) {
+                    final java.lang.reflect.ParameterizedType pt =
+                            (java.lang.reflect.ParameterizedType)
+                                    iface;
+                    if (pt.getRawType()
+                            == ExceptionMapper.class) {
+                        final java.lang.reflect.Type arg =
+                                pt.getActualTypeArguments()[0];
+                        if (arg instanceof Class
+                                && ((Class<?>) arg)
+                                .isInstance(e)) {
+                            return true;
+                        }
                     }
                 }
             }
+            clazz = clazz.getSuperclass();
         }
         return false;
     }
@@ -492,21 +538,50 @@ public final class JaxrsAsyncServerRequestHandler
                 context);
     }
 
+    private static boolean isMediaTypeCompatible(
+            final String actual,
+            final String[] accepted) {
+        if (accepted == null || accepted.length == 0) {
+            return true;
+        }
+        final MediaType actualType = MediaType.valueOf(actual);
+        for (final String a : accepted) {
+            if (MediaType.valueOf(a).isCompatible(actualType)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean isWildcard(final String[] types) {
         return types == null || types.length == 0
                 || types.length == 1 && "*/*".equals(types[0]);
     }
 
     /**
-     * Selects the first {@code @Produces} type that is compatible with
-     * the client's {@code Accept} header. Entries with quality value
-     * zero are excluded. Returns {@code null} if no compatible type
-     * exists.
+     * Selects the best {@code @Produces} type that is compatible with
+     * the client's {@code Accept} header. Accept entries are sorted by
+     * quality value descending so that higher-priority types are matched
+     * first. Entries with quality value zero are excluded. Returns
+     * {@code null} if no compatible type exists.
      */
     static String selectProducesType(
             final String acceptHeader,
             final String[] producesTypes) {
-        for (final String token : acceptHeader.split(",")) {
+        final String[] tokens = acceptHeader.split(",");
+        final List<String> sorted = new ArrayList<>(tokens.length);
+        for (final String token : tokens) {
+            sorted.add(token);
+        }
+        Collections.sort(sorted, new Comparator<String>() {
+            @Override
+            public int compare(final String a, final String b) {
+                return Float.compare(
+                        parseQuality(b.trim()),
+                        parseQuality(a.trim()));
+            }
+        });
+        for (final String token : sorted) {
             final String trimmed = token.trim();
             final int semi = trimmed.indexOf(';');
             final String base = semi >= 0
@@ -545,21 +620,30 @@ public final class JaxrsAsyncServerRequestHandler
         }
     }
 
-    private static Map<String, String> parseQueryString(
+    private static Map<String, List<String>> parseQueryString(
             final String queryString) {
         if (queryString == null || queryString.isEmpty()) {
             return Collections.emptyMap();
         }
-        final Map<String, String> params = new LinkedHashMap<>();
+        final Map<String, List<String>> params =
+                new LinkedHashMap<>();
         for (final String pair : queryString.split("&")) {
             final int eq = pair.indexOf('=');
+            final String key;
+            final String value;
             if (eq >= 0) {
-                params.put(
-                        urlDecode(pair.substring(0, eq)),
-                        urlDecode(pair.substring(eq + 1)));
+                key = urlDecode(pair.substring(0, eq));
+                value = urlDecode(pair.substring(eq + 1));
             } else {
-                params.put(urlDecode(pair), "");
+                key = urlDecode(pair);
+                value = "";
             }
+            List<String> values = params.get(key);
+            if (values == null) {
+                values = new ArrayList<>();
+                params.put(key, values);
+            }
+            values.add(value);
         }
         return params;
     }

@@ -34,9 +34,14 @@ import org.apache.hc.core5.http.config.Http1Config;
 import org.apache.hc.core5.http.impl.bootstrap.AsyncServerBootstrap;
 import org.apache.hc.core5.http.impl.bootstrap.HttpAsyncServer;
 import org.apache.hc.core5.http.impl.routing.RequestRouter;
-import org.apache.hc.core5.jaxrs.ext.ExceptionMapper;
+import javax.ws.rs.ext.ExceptionMapper;
+import javax.ws.rs.ext.MessageBodyReader;
+import javax.ws.rs.ext.MessageBodyWriter;
 import org.apache.hc.core5.jaxrs.impl.JaxrsAsyncServerRequestHandler;
 import org.apache.hc.core5.jaxrs.impl.ResourceMethod;
+import org.apache.hc.core5.jaxrs.impl.provider.ByteArrayEntityProvider;
+import org.apache.hc.core5.jaxrs.impl.provider.JacksonJsonProvider;
+import org.apache.hc.core5.jaxrs.impl.provider.StringEntityProvider;
 import org.apache.hc.core5.reactor.IOReactorConfig;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,7 +51,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * requests to JAX-RS annotated resource classes. Resource instances
  * are scanned for {@code @Path}, HTTP method, and parameter annotations
  * and bound to URI templates. Request and response bodies are serialized
- * with Jackson.
+ * through pluggable {@link MessageBodyReader} and {@link MessageBodyWriter}
+ * providers; Jackson is registered by default.
  *
  * <pre>
  * HttpAsyncServer server = JaxrsServerBootstrap.bootstrap()
@@ -62,6 +68,7 @@ public final class JaxrsServerBootstrap {
 
     private final List<Object> resources;
     private final List<ExceptionMapper<?>> exceptionMappers;
+    private final List<Object> providers;
     private ObjectMapper objectMapper;
     private IOReactorConfig ioReactorConfig;
     private Http1Config http1Config;
@@ -70,6 +77,7 @@ public final class JaxrsServerBootstrap {
     private JaxrsServerBootstrap() {
         this.resources = new ArrayList<>();
         this.exceptionMappers = new ArrayList<>();
+        this.providers = new ArrayList<>();
     }
 
     /**
@@ -93,13 +101,29 @@ public final class JaxrsServerBootstrap {
     }
 
     /**
+     * Registers a {@link MessageBodyReader} or {@link MessageBodyWriter}
+     * provider for custom entity serialization. User-registered providers
+     * take precedence over the built-in providers.
+     *
+     * @param provider the provider instance.
+     * @return this bootstrap for chaining.
+     * @since 5.5
+     */
+    public JaxrsServerBootstrap registerProvider(
+            final Object provider) {
+        providers.add(provider);
+        return this;
+    }
+
+    /**
      * Registers an exception mapper that converts exceptions thrown by
      * resource methods into HTTP responses.
      *
      * @param mapper the exception mapper.
      * @return this bootstrap for chaining.
      */
-    public JaxrsServerBootstrap addExceptionMapper(final ExceptionMapper<?> mapper) {
+    public JaxrsServerBootstrap addExceptionMapper(
+            final ExceptionMapper<?> mapper) {
         exceptionMappers.add(mapper);
         return this;
     }
@@ -111,7 +135,8 @@ public final class JaxrsServerBootstrap {
      * @param objectMapper the object mapper.
      * @return this bootstrap for chaining.
      */
-    public JaxrsServerBootstrap setObjectMapper(final ObjectMapper objectMapper) {
+    public JaxrsServerBootstrap setObjectMapper(
+            final ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
         return this;
     }
@@ -122,7 +147,8 @@ public final class JaxrsServerBootstrap {
      * @param ioReactorConfig the reactor config.
      * @return this bootstrap for chaining.
      */
-    public JaxrsServerBootstrap setIOReactorConfig(final IOReactorConfig ioReactorConfig) {
+    public JaxrsServerBootstrap setIOReactorConfig(
+            final IOReactorConfig ioReactorConfig) {
         this.ioReactorConfig = ioReactorConfig;
         return this;
     }
@@ -133,7 +159,8 @@ public final class JaxrsServerBootstrap {
      * @param http1Config the protocol config.
      * @return this bootstrap for chaining.
      */
-    public JaxrsServerBootstrap setHttp1Config(final Http1Config http1Config) {
+    public JaxrsServerBootstrap setHttp1Config(
+            final Http1Config http1Config) {
         this.http1Config = http1Config;
         return this;
     }
@@ -162,15 +189,45 @@ public final class JaxrsServerBootstrap {
             methods.addAll(ResourceMethod.scan(resource));
         }
         if (methods.isEmpty()) {
-            throw new IllegalStateException("No JAX-RS resource methods found");
+            throw new IllegalStateException(
+                    "No JAX-RS resource methods found");
         }
         ResourceMethod.validateNoDuplicateRoutes(methods);
+
         final ObjectMapper mapper = objectMapper != null
                 ? objectMapper : new ObjectMapper();
-        final JaxrsAsyncServerRequestHandler handler =
-                new JaxrsAsyncServerRequestHandler(methods, mapper, exceptionMappers);
 
-        final AsyncServerBootstrap bootstrap = AsyncServerBootstrap.bootstrap();
+        // Build provider lists: user-registered first, then defaults
+        final List<MessageBodyReader<?>> readers = new ArrayList<>();
+        final List<MessageBodyWriter<?>> writers = new ArrayList<>();
+        for (final Object p : providers) {
+            if (p instanceof MessageBodyReader) {
+                readers.add((MessageBodyReader<?>) p);
+            }
+            if (p instanceof MessageBodyWriter) {
+                writers.add((MessageBodyWriter<?>) p);
+            }
+        }
+        final StringEntityProvider stringProvider =
+                new StringEntityProvider();
+        final ByteArrayEntityProvider byteArrayProvider =
+                new ByteArrayEntityProvider();
+        final JacksonJsonProvider jacksonProvider =
+                new JacksonJsonProvider(mapper);
+        readers.add(stringProvider);
+        readers.add(byteArrayProvider);
+        readers.add(jacksonProvider);
+        writers.add(stringProvider);
+        writers.add(byteArrayProvider);
+        writers.add(jacksonProvider);
+
+        final JaxrsAsyncServerRequestHandler handler =
+                new JaxrsAsyncServerRequestHandler(
+                        methods, readers, writers,
+                        exceptionMappers);
+
+        final AsyncServerBootstrap bootstrap =
+                AsyncServerBootstrap.bootstrap();
         if (ioReactorConfig != null) {
             bootstrap.setIOReactorConfig(ioReactorConfig);
         }
@@ -181,7 +238,8 @@ public final class JaxrsServerBootstrap {
             bootstrap.setExceptionCallback(exceptionCallback);
         }
         bootstrap.setCanonicalHostName("localhost");
-        bootstrap.setAuthorityResolver(RequestRouter.LOCAL_AUTHORITY_RESOLVER);
+        bootstrap.setAuthorityResolver(
+                RequestRouter.LOCAL_AUTHORITY_RESOLVER);
         bootstrap.register("*", handler);
         return bootstrap.create();
     }
