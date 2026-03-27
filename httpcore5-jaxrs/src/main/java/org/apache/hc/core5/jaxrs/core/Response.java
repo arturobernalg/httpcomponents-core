@@ -32,6 +32,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hc.core5.http.HttpHeaders;
+
 /**
  * Defines an HTTP response with status code, headers and an optional
  * entity body. Instances are created through the static factory methods
