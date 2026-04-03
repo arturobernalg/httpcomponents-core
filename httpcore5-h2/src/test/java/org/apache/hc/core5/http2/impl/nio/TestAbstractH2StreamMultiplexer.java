@@ -145,7 +145,7 @@ class TestAbstractH2StreamMultiplexer {
         @Override
         H2Setting[] generateSettings(final H2Config localConfig) {
             return new H2Setting[] {
-                    new H2Setting(H2Param.HEADER_TABLE_SIZE, localConfig.getHeaderTableSize()),
+                    new H2Setting(H2Param.HEADER_TABLE_SIZE, localConfig.getDecoderHeaderTableSize()),
                     new H2Setting(H2Param.ENABLE_PUSH, localConfig.isPushEnabled() ? 1 : 0),
                     new H2Setting(H2Param.MAX_CONCURRENT_STREAMS, localConfig.getMaxConcurrentStreams()),
                     new H2Setting(H2Param.INITIAL_WINDOW_SIZE, localConfig.getInitialWindowSize()),
@@ -2017,5 +2017,36 @@ class TestAbstractH2StreamMultiplexer {
                 .consumeHeader(ArgumentMatchers.anyList(), ArgumentMatchers.anyBoolean());
     }
 
+    @Test
+    void testEncoderTableSizeCappedByLocalConfig() throws Exception {
+        final int encoderLimit = 2048;
+        final int peerAdvertised = 16384;
+        final H2Config h2Config = H2Config.custom()
+                .setDecoderHeaderTableSize(8192)
+                .setEncoderHeaderTableSize(encoderLimit)
+                .build();
+
+        final AbstractH2StreamMultiplexer mux = new H2StreamMultiplexerImpl(
+                protocolIOSession,
+                FRAME_FACTORY,
+                StreamIdGenerator.ODD,
+                httpProcessor,
+                CharCodingConfig.DEFAULT,
+                h2Config,
+                h2StreamListener,
+                () -> streamHandler);
+
+        final RawFrame remoteSettings = FRAME_FACTORY.createSettings(new H2Setting[] {
+                new H2Setting(H2Param.HEADER_TABLE_SIZE, peerAdvertised)
+        });
+        feedFrame(mux, remoteSettings);
+
+        feedFrame(mux, new RawFrame(FrameType.SETTINGS.getValue(), FrameFlag.ACK.getValue(), 0, null));
+
+        final Field encoderField = AbstractH2StreamMultiplexer.class.getDeclaredField("hPackEncoder");
+        encoderField.setAccessible(true);
+        final HPackEncoder encoder = (HPackEncoder) encoderField.get(mux);
+        Assertions.assertEquals(encoderLimit, encoder.getMaxTableSize());
+    }
 
 }

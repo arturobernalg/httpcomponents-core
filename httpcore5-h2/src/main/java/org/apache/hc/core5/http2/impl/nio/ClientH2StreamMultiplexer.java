@@ -117,7 +117,7 @@ public class ClientH2StreamMultiplexer extends AbstractH2StreamMultiplexer {
     @Override
     H2Setting[] generateSettings(final H2Config localConfig) {
         return new H2Setting[] {
-                new H2Setting(H2Param.HEADER_TABLE_SIZE, localConfig.getHeaderTableSize()),
+                new H2Setting(H2Param.HEADER_TABLE_SIZE, localConfig.getDecoderHeaderTableSize()),
                 new H2Setting(H2Param.ENABLE_PUSH, localConfig.isPushEnabled() ? 1 : 0),
                 new H2Setting(H2Param.MAX_CONCURRENT_STREAMS, localConfig.getMaxConcurrentStreams()),
                 new H2Setting(H2Param.INITIAL_WINDOW_SIZE, localConfig.getInitialWindowSize()),

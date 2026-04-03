@@ -43,7 +43,8 @@ public class H2Config {
     public static final H2Config DEFAULT = custom().build();
     public static final H2Config INIT = initial().build();
 
-    private final int headerTableSize;
+    private final int decoderHeaderTableSize;
+    private final int encoderHeaderTableSize;
     private final boolean pushEnabled;
     private final int maxConcurrentStreams;
     private final int initialWindowSize;
@@ -52,11 +53,13 @@ public class H2Config {
     private final boolean compressionEnabled;
     private final int maxContinuations;
 
-    H2Config(final int headerTableSize, final boolean pushEnabled, final int maxConcurrentStreams,
+    H2Config(final int decoderHeaderTableSize, final int encoderHeaderTableSize,
+             final boolean pushEnabled, final int maxConcurrentStreams,
              final int initialWindowSize, final int maxFrameSize, final int maxHeaderListSize,
              final boolean compressionEnabled, final int maxContinuations) {
         super();
-        this.headerTableSize = headerTableSize;
+        this.decoderHeaderTableSize = decoderHeaderTableSize;
+        this.encoderHeaderTableSize = encoderHeaderTableSize;
         this.pushEnabled = pushEnabled;
         this.maxConcurrentStreams = maxConcurrentStreams;
         this.initialWindowSize = initialWindowSize;
@@ -66,8 +69,31 @@ public class H2Config {
         this.maxContinuations = maxContinuations;
     }
 
+    /**
+     * Returns the decoder header table size. This is the value advertised to the peer
+     * via SETTINGS_HEADER_TABLE_SIZE and used for the local HPACK decoder.
+     *
+     * @since 5.5
+     */
+    public int getDecoderHeaderTableSize() {
+        return decoderHeaderTableSize;
+    }
+
+    /**
+     * Returns the encoder header table size limit. Peer SETTINGS_HEADER_TABLE_SIZE
+     * values are capped by this limit before being applied to the local HPACK encoder.
+     *
+     * @since 5.5
+     */
+    public int getEncoderHeaderTableSize() {
+        return encoderHeaderTableSize;
+    }
+
+    /**
+     * Returns the decoder header table size for backward compatibility.
+     */
     public int getHeaderTableSize() {
-        return headerTableSize;
+        return decoderHeaderTableSize;
     }
 
     public boolean isPushEnabled() {
@@ -101,7 +127,8 @@ public class H2Config {
     @Override
     public String toString() {
         final StringBuilder builder = new StringBuilder();
-        builder.append("[headerTableSize=").append(this.headerTableSize)
+        builder.append("[decoderHeaderTableSize=").append(this.decoderHeaderTableSize)
+                .append(", encoderHeaderTableSize=").append(this.encoderHeaderTableSize)
                 .append(", pushEnabled=").append(this.pushEnabled)
                 .append(", maxConcurrentStreams=").append(this.maxConcurrentStreams)
                 .append(", initialWindowSize=").append(this.initialWindowSize)
@@ -136,7 +163,8 @@ public class H2Config {
     public static H2Config.Builder copy(final H2Config config) {
         Args.notNull(config, "Connection config");
         return new Builder()
-                .setHeaderTableSize(config.getHeaderTableSize())
+                .setDecoderHeaderTableSize(config.getDecoderHeaderTableSize())
+                .setEncoderHeaderTableSize(config.getEncoderHeaderTableSize())
                 .setPushEnabled(config.isPushEnabled())
                 .setMaxConcurrentStreams(config.getMaxConcurrentStreams())
                 .setInitialWindowSize(config.getInitialWindowSize())
@@ -147,7 +175,8 @@ public class H2Config {
 
     public static class Builder {
 
-        private int headerTableSize;
+        private int decoderHeaderTableSize;
+        private int encoderHeaderTableSize;
         private boolean pushEnabled;
         private int maxConcurrentStreams;
         private int initialWindowSize;
@@ -157,7 +186,8 @@ public class H2Config {
         private int maxContinuations;
 
         Builder() {
-            this.headerTableSize = INIT_HEADER_TABLE_SIZE * 2;
+            this.decoderHeaderTableSize = INIT_HEADER_TABLE_SIZE * 2;
+            this.encoderHeaderTableSize = INIT_HEADER_TABLE_SIZE * 2;
             this.pushEnabled = INIT_ENABLE_PUSH;
             this.maxConcurrentStreams = INIT_CONCURRENT_STREAM;
             this.initialWindowSize = INIT_WINDOW_SIZE;
@@ -167,9 +197,38 @@ public class H2Config {
             this.maxContinuations = 100;
         }
 
+        /**
+         * Sets both the decoder and encoder header table size.
+         */
         public Builder setHeaderTableSize(final int headerTableSize) {
             Args.notNegative(headerTableSize, "Header table size");
-            this.headerTableSize = headerTableSize;
+            this.decoderHeaderTableSize = headerTableSize;
+            this.encoderHeaderTableSize = headerTableSize;
+            return this;
+        }
+
+        /**
+         * Sets the decoder header table size. This value is advertised to the peer
+         * via SETTINGS_HEADER_TABLE_SIZE and controls the local HPACK decoder table.
+         *
+         * @since 5.5
+         */
+        public Builder setDecoderHeaderTableSize(final int decoderHeaderTableSize) {
+            Args.notNegative(decoderHeaderTableSize, "Decoder header table size");
+            this.decoderHeaderTableSize = decoderHeaderTableSize;
+            return this;
+        }
+
+        /**
+         * Sets the encoder header table size limit. Peer SETTINGS_HEADER_TABLE_SIZE
+         * values are capped by this limit before being applied to the local HPACK
+         * encoder.
+         *
+         * @since 5.5
+         */
+        public Builder setEncoderHeaderTableSize(final int encoderHeaderTableSize) {
+            Args.notNegative(encoderHeaderTableSize, "Encoder header table size");
+            this.encoderHeaderTableSize = encoderHeaderTableSize;
             return this;
         }
 
@@ -218,7 +277,8 @@ public class H2Config {
 
         public H2Config build() {
             return new H2Config(
-                    headerTableSize,
+                    decoderHeaderTableSize,
+                    encoderHeaderTableSize,
                     pushEnabled,
                     maxConcurrentStreams,
                     initialWindowSize,

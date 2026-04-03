@@ -1236,7 +1236,7 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
                 switch (param) {
                     case HEADER_TABLE_SIZE:
                         try {
-                            configBuilder.setHeaderTableSize(value);
+                            configBuilder.setDecoderHeaderTableSize(value);
                         } catch (final IllegalArgumentException ex) {
                             throw new H2ConnectionException(H2Error.PROTOCOL_ERROR, ex.getMessage());
                         }
@@ -1306,7 +1306,7 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
     private void applyRemoteSettings(final H2Config config) throws H2ConnectionException {
         remoteConfig = config;
 
-        hPackEncoder.setMaxTableSize(remoteConfig.getHeaderTableSize());
+        hPackEncoder.setMaxTableSize(Math.min(remoteConfig.getDecoderHeaderTableSize(), localConfig.getEncoderHeaderTableSize()));
         final int delta = remoteConfig.getInitialWindowSize() - initOutputWinSize;
         initOutputWinSize = remoteConfig.getInitialWindowSize();
 
@@ -1334,7 +1334,7 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
     }
 
     private void applyLocalSettings() throws H2ConnectionException {
-        hPackDecoder.setMaxTableSize(localConfig.getHeaderTableSize());
+        hPackDecoder.setMaxTableSize(localConfig.getDecoderHeaderTableSize());
         hPackDecoder.setMaxListSize(localConfig.getMaxHeaderListSize());
 
         final int delta = localConfig.getInitialWindowSize() - initInputWinSize;

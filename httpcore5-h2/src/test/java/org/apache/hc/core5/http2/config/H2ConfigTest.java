@@ -37,17 +37,15 @@ import org.junit.jupiter.api.Test;
 class H2ConfigTest {
 
     @Test
-    void builder() {
-        // Create and start requester
-        final H2Config h2Config = H2Config.custom()
-                .setPushEnabled(false)
-                .build();
+    void defaults() {
+        final H2Config h2Config = H2Config.custom().build();
         assertNotNull(h2Config);
+        assertEquals(8192, h2Config.getDecoderHeaderTableSize());
+        assertEquals(8192, h2Config.getEncoderHeaderTableSize());
     }
 
     @Test
     void checkValues() {
-        // Create and start requester
         final H2Config h2Config = H2Config.custom()
                 .setHeaderTableSize(1)
                 .setMaxConcurrentStreams(1)
@@ -57,6 +55,8 @@ class H2ConfigTest {
                 .build();
 
         assertEquals(1, h2Config.getHeaderTableSize());
+        assertEquals(1, h2Config.getDecoderHeaderTableSize());
+        assertEquals(1, h2Config.getEncoderHeaderTableSize());
         assertEquals(1, h2Config.getMaxConcurrentStreams());
         assertEquals(16384, h2Config.getMaxFrameSize());
         assertTrue(h2Config.isPushEnabled());
@@ -64,10 +64,32 @@ class H2ConfigTest {
     }
 
     @Test
-    void copy() {
-        // Create and start requester
+    void splitHeaderTableSize() {
         final H2Config h2Config = H2Config.custom()
-                .setHeaderTableSize(1)
+                .setDecoderHeaderTableSize(16384)
+                .setEncoderHeaderTableSize(4096)
+                .build();
+
+        assertEquals(16384, h2Config.getDecoderHeaderTableSize());
+        assertEquals(4096, h2Config.getEncoderHeaderTableSize());
+        assertEquals(16384, h2Config.getHeaderTableSize());
+    }
+
+    @Test
+    void legacySetHeaderTableSizeSetsBoth() {
+        final H2Config h2Config = H2Config.custom()
+                .setHeaderTableSize(2048)
+                .build();
+
+        assertEquals(2048, h2Config.getDecoderHeaderTableSize());
+        assertEquals(2048, h2Config.getEncoderHeaderTableSize());
+    }
+
+    @Test
+    void copy() {
+        final H2Config h2Config = H2Config.custom()
+                .setDecoderHeaderTableSize(16384)
+                .setEncoderHeaderTableSize(4096)
                 .setMaxConcurrentStreams(1)
                 .setMaxFrameSize(16384)
                 .setPushEnabled(true)
@@ -78,6 +100,8 @@ class H2ConfigTest {
         final H2Config h2Config2 = builder.build();
 
         assertAll(
+                () -> assertEquals(h2Config.getDecoderHeaderTableSize(), h2Config2.getDecoderHeaderTableSize()),
+                () -> assertEquals(h2Config.getEncoderHeaderTableSize(), h2Config2.getEncoderHeaderTableSize()),
                 () -> assertEquals(h2Config.getHeaderTableSize(), h2Config2.getHeaderTableSize()),
                 () -> assertEquals(h2Config.getInitialWindowSize(), h2Config2.getInitialWindowSize()),
                 () -> assertEquals(h2Config.getMaxConcurrentStreams(), h2Config2.getMaxConcurrentStreams()),
