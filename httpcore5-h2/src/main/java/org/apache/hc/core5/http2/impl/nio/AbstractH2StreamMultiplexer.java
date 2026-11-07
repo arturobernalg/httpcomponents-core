@@ -104,6 +104,8 @@ import org.apache.hc.core5.util.Timeout;
 
 abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnection {
 
+    private final H2ControlFrameRateLimiter controlFrameRateLimiter = new H2ControlFrameRateLimiter();
+
     private static final long CONNECTION_WINDOW_LOW_MARK = 10 * 1024 * 1024;
 
     enum ConnectionHandshake { READY, ACTIVE, GRACEFUL_SHUTDOWN, SHUTDOWN }
@@ -976,7 +978,10 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
                         pingHandler.consumeResponse(ping);
                     }
                 } else {
-                    final ByteBuffer pong = ByteBuffer.allocate(ping.remaining());
+                    if (!controlFrameRateLimiter.accept(System.nanoTime())) {
+                    throw new H2ConnectionException(H2Error.ENHANCE_YOUR_CALM,  "Excessive HTTP/2 PING / SETTINGS frames");
+                }
+                final ByteBuffer pong = ByteBuffer.allocate(ping.remaining());
                     pong.put(ping);
                     pong.flip();
                     final RawFrame response = frameFactory.createPingAck(pong);
@@ -1004,7 +1009,11 @@ abstract class AbstractH2StreamMultiplexer implements Identifiable, HttpConnecti
                         applyLocalSettings();
                     }
                 } else {
-                    final ByteBuffer payload = frame.getPayload();
+                    if (!controlFrameRateLimiter.accept(System.nanoTime())) {
+                    throw new H2ConnectionException(H2Error.ENHANCE_YOUR_CALM,
+                            "Excessive HTTP/2 PING / SETTINGS frames");
+                }
+                final ByteBuffer payload = frame.getPayload();
                     if (payload != null) {
                         if ((payload.remaining() % 6) != 0) {
                             throw new H2ConnectionException(H2Error.FRAME_SIZE_ERROR, "Invalid SETTINGS payload");
