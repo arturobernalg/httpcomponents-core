@@ -264,7 +264,7 @@ public class HttpRequester implements ConnPoolControl<HttpHost>, ModalCloseable 
                 Sockets.setOption(sock, ExtendedSocketOptions.TCP_KEEPCOUNT, this.socketConfig.getTcpKeepCount());
             }
         }
-        final int linger = socketConfig.getSoLinger().toMillisecondsIntBound();
+        final int linger = socketConfig.getSoLinger().toSecondsIntBound();
         if (linger >= 0) {
             sock.setSoLinger(true, linger);
         }
